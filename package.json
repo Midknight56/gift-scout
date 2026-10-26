@@ -1,0 +1,20 @@
+{
+  "name": "gift-scout",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
+    "test": "vitest run",
+    "gate": "npm run check && vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "@types/node": "^24.0.0",
+    "playwright": "^1.64.1",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.152.0"
+  }
+}

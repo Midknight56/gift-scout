@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5f0">
+  <title>Gift Scout</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="chat-column" aria-label="Gift Scout chat">
+      <header class="topline"><a class="wordmark" href="/" aria-label="Gift Scout home">GS<span>·</span></a><button class="how-button" id="how-button" type="button">How it works</button></header>
+      <dialog class="how-dialog" id="how-dialog" aria-labelledby="how-title">
+        <div class="how-heading"><h2 id="how-title">How it works</h2><button class="how-close" id="how-close" type="button" aria-label="Close">×</button></div>
+        <ol class="how-steps">
+          <li>Say who the gift is for and what they love.</li>
+          <li>Gift Scout asks Qloo's taste graph what the same people love: brands, books, podcasts, trips, places.</li>
+          <li>Each card shows the love it came from, the Qloo result and its score. The panel shows every call.</li>
+          <li>Narrow it down, share it, or buy one in the PayPal sandbox. No real money.</li>
+        </ol>
+        <p class="how-credit">Made with Qloo and PayPal (sandbox).</p>
+      </dialog>
+      <div class="chat-scroll" id="chat-scroll">
+        <div class="empty-state" id="empty-state">
+          <h1>Gift Scout</h1>
+          <p class="empty-copy">Tell me who it is for and what they love.</p>
+        </div>
+        <div class="chat-log" id="chat-log" aria-live="polite" aria-relevant="additions"></div>
+      </div>
+      <footer class="composer-wrap">
+        <div class="examples" id="examples" aria-label="Try an example"></div>
+        <form class="composer" id="composer">
+          <label class="sr-only" for="message">Describe who the gift is for</label>
+          <textarea id="message" rows="2" maxlength="2000" placeholder="Tell me about them…"></textarea>
+          <button class="send-button" type="submit" aria-label="Find a gift"><span>Find a gift</span><span aria-hidden="true">↗</span></button>
+        </form>
+      </footer>
+    </section>
+    <aside class="scene-panel" id="scene-panel" aria-label="Behind the scenes">
+      <div class="panel-heading"><div><p class="eyebrow">Every Qloo call</p><h2>Behind the scenes</h2></div><button class="sheet-close" id="sheet-close" type="button" aria-label="Close panel">×</button></div>
+      <div class="run-label" id="run-label" hidden></div>
+      <div class="calls-list" id="calls-list"><div class="panel-empty" id="panel-empty"><span class="spark-mark">✳</span><p>Each question Gift Scout asks Qloo shows up here, with what came back.</p></div></div>
+      <div class="dropped-wrap" id="dropped-wrap" hidden><h3>Set aside</h3><div id="dropped-list"></div></div>
+      <div class="usage" id="usage" hidden></div>
+    </aside>
+    <button class="panel-trigger" id="panel-trigger" type="button" aria-expanded="false"><span class="trigger-dot"></span>Behind the scenes<span class="trigger-arrow">↑</span></button>
+  </main>
+</body>
+</html>

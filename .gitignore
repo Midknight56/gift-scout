@@ -1,0 +1,8 @@
+.dev.vars
+.wrangler
+docs
+node_modules
+notes
+private/
+out
+__pycache__/

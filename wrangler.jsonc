@@ -1,0 +1,19 @@
+{
+  "name": "gift-scout",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  // The second Cloudflare account, the one kept for the hackathon apps (Workers Free plan).
+  "account_id": "9fc5652f61b1f60eb20e1d9a2ef70041",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/mcp", "/s/*", "/health", "/paid"] },
+  "ai": { "binding": "AI", "remote": true },
+  // DB is this app's own (the Qloo cache, conversations, the run cache). LEDGER is shared by the hackathon apps: every
+  // Workers AI call is counted there, so the apps together stay inside the account's free 10,000 neurons a day.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "gift-scout", "database_id": "21b2c916-4377-4c21-b04e-59cf0bf21bab", "migrations_dir": "migrations" },
+    // remote: even `wrangler dev` counts in the shared ledger, because its model calls spend the same real neurons.
+    { "binding": "LEDGER", "database_name": "hackathon-ledger", "database_id": "023377a8-ad19-413c-b769-d195d05427b3", "remote": true }
+  ],
+  "durable_objects": { "bindings": [{ "name": "COUNTERS", "class_name": "DailyCounter" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DailyCounter"] }],
+  "observability": { "enabled": false }
+}

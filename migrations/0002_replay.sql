@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS qloo_samples (
+  key TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recorded_runs (
+  example TEXT PRIMARY KEY,
+  run TEXT NOT NULL
+);
