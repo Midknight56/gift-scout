@@ -7,6 +7,19 @@ sandbox.
 
 Try it: https://gift-scout.midknight-labs.workers.dev
 
+## Judge in 60 seconds
+
+1. Open https://gift-scout.midknight-labs.workers.dev and tap the example "My dad. Le Carre novels and single malt.
+   Christmas." (or write your own person).
+2. Watch "Behind the scenes" on the right fill with every Qloo call as it runs. Each of the six cards shows the Qloo
+   result it rests on and Qloo's split of which love pulled it in.
+3. Tap "Compare with Qloo off" under the cards: the same model with no Qloo, its ideas scored against the same loves.
+
+Then "Buy this one" pays for a card in the PayPal sandbox, with the sandbox buyer below or PayPal's test card and no
+login. Nothing here costs real money.
+
+Built for this contest: the first commit was on 22 Oct 2026. Everything in this repo was written after 1 Oct.
+
 ## What a run looks like
 
 The "How it works" button in the top bar opens a sheet with four short steps.
