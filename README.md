@@ -18,7 +18,7 @@ Try it: https://gift-scout.midknight-labs.workers.dev
 Then "Buy this one" pays for a card in the PayPal sandbox, with the sandbox buyer below or PayPal's test card and no
 login. Nothing here costs real money.
 
-Built for this contest: the first commit was on 22 Oct 2026. Everything in this repo was written after 1 Oct.
+Built for this contest: work began on 22 Oct 2026. Everything in this repo was written after 1 Oct.
 
 ## What a run looks like
 
