@@ -2,7 +2,7 @@
 // A turn is served in the cheapest honest way it can be:
 //   cache   the same first message was answered live before: its saved turn is sent again, 0 neurons, 0 Qloo calls;
 //   live    the agent runs on Workers AI and Qloo, inside the daily caps;
-//   replay  live is not possible (no Qloo key, the AI budget spent, the visitor's cap reached) and the message is one
+//   replay  live is not possible (no Qloo key, Qloo refused the key, the AI budget spent, the visitor's cap reached) and the message is one
 //           of the three examples: the run recorded for it is sent, labelled as recorded with its date.
 // Otherwise the turn ends with a calm line saying why. Every mode says which it is in the `run` event.
 import { newState, runTurn, type Budget, type ConversationState } from '../agent/agent'
@@ -123,7 +123,7 @@ export async function scoutTurn(message: string, conversationId: string | undefi
 
   // 2. Live.
   let why = ''
-  if (!deps.live) why = 'Live scouting is off right now.'
+  if (!deps.live) why = 'The live taste graph is not available right now.'
   else if (!(await deps.live.budget.allow())) why = 'Live scouting has used its budget for today.'
   else if (!(await deps.live.takeVisitorTurn())) why = 'You have scouted a lot today.'
   if (!why && deps.live) {

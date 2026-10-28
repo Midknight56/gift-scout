@@ -9,7 +9,7 @@
 // Happy path: example 2, six cards with Qloo's split in the cards, panel and share page, the panel's Qloo calls,
 // "Compare with Qloo off", Qloo's scores for the plain model's picks, "Make it cheaper, under 30 dollars.", "Buy this one", PayPal sandbox approval as the sandbox buyer, back to the share page with
 // the capture row, the PayPal tracker with only the city on the page, and "Changed my mind" refunding the capture. Bad paths:
-// a four digit ZIP, a refund without or with a wrong owner token, a second refund, a two letter message, a share link that never existed, a /paid link Gift Scout never made,
+// the live taste graph down (the page says so up front), a four digit ZIP, a refund without or with a wrong owner token, a second refund, a two letter message, a share link that never existed, a /paid link Gift Scout never made,
 // a stranger seeing no buy button or compare button, a compare without the owner token, a second compare, a buy without the owner token, and a buy with a wrong owner token.
 // The sandbox buyer's login is read from the secrets file at run time and never printed.
 // Run it through the shared browser lock: python A:/Projects/shipatonv2/tools/pw_lock.py run gift-scout -- node tools/e2e.mjs ...
@@ -79,9 +79,21 @@ async function main() {
     check('a share link that never existed says so', /expired or never existed/i.test(await page.locator('.error-line').first().innerText()))
     const bogus = await page.goto(BASE + '/paid?c=nosuchconversation&token=ABCDEFGHIJ123456')
     check('a /paid link Gift Scout never made is refused', bogus?.status() === 404, `HTTP ${bogus?.status()}`)
+    // The live taste graph down: the page says so before anything is typed, and the three examples stay.
+    await page.route('**/api/examples', async (route) => {
+      const real = await (await route.fetch()).json()
+      await route.fulfill({ json: { ...real, live: false } })
+    })
+    await page.goto(BASE + '/')
+    await page.locator('.graph-off').waitFor({ timeout: 15000 })
+    check('with the live taste graph down, the page says so before anything is typed', /live taste graph is not available/i.test(await page.locator('.graph-off').innerText()))
+    check('and the three examples are still offered', (await page.locator('[data-example]').count()) === 3)
+    await page.unroute('**/api/examples')
 
     // The happy path.
     await page.goto(BASE + '/')
+    await page.locator('[data-example]').first().waitFor({ timeout: 15000 })
+    check('with the live taste graph up, the page shows no such line', (await page.locator('.graph-off').count()) === 0)
     await page.locator('[data-example]').nth(1).click()
     await page.locator('.gift-card').nth(4).waitFor({ timeout: 120000 })
     await page.waitForTimeout(1500)

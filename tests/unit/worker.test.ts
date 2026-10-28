@@ -9,7 +9,7 @@ import { ownerToken } from '../../src/app/buy'
 import { EXAMPLES } from '../../src/app/scout'
 import { DEFAULT_DAILY_NEURONS, DEFAULT_ACCOUNT_NEURONS } from '../../src/limits'
 import { channel3Enabled } from '../../src/channel3/flag'
-import { Conversations, D1Cache } from '../../src/store/d1'
+import { Conversations, D1Cache, QLOO_REFUSED_KEY } from '../../src/store/d1'
 import { FakeD1 } from './fake-d1'
 
 const databases: FakeD1[] = []
@@ -86,7 +86,7 @@ describe('worker front door', () => {
   it('GET /api/examples answers the three EXAMPLES', async () => {
     const response = await call('/api/examples')
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ examples: EXAMPLES })
+    expect(await response.json()).toEqual({ examples: EXAMPLES, live: false })
   })
 
   it('rejects a cross-site scout POST before starting work', async () => {
@@ -252,5 +252,62 @@ describe('worker front door', () => {
     const response = await call('/s/unknown1')
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('<html>asset page</html>')
+  })
+})
+
+describe('the live taste graph is not available', () => {
+  const SEARCH_CALL = { name: 'search_entities', arguments: { query: 'Phoebe Bridgers', type: 'artist' } }
+  async function mcpSearch(h: ReturnType<typeof setup>) {
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
+    const init = await call('/mcp', {
+      method: 'POST', headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }),
+    }, h)
+    const sid = init.headers.get('MCP-Session-Id')!
+    await call('/mcp', { method: 'POST', headers: { ...headers, 'MCP-Session-Id': sid }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: SEARCH_CALL }) }, h)
+    await Promise.all(h.pending)
+  }
+  const live = (count: { ai: number }) => ({
+    AI: { run: async () => { count.ai++; return { response: 'I could use more detail.', usage: { prompt_tokens: 1, completion_tokens: 1 } } } } as never,
+    QLOO_API_KEY: 'fake',
+  })
+  const replay = {
+    recorded_at: '2026-01-01T00:00:00Z',
+    turns: [[{ t: 'run', conversation: 'old', turn: 1, mode: 'live', said: EXAMPLES[0] }, { t: 'cards', cards: [], dropped: [] }]],
+    states: [{ ...newState('old'), turn: 1, said: [EXAMPLES[0]] }],
+  }
+
+  it('says so in plain words when there is no Qloo key', async () => {
+    const unknown = await stream('/api/scout', { message: 'A new message about my aunt' })
+    expect(unknown.events[0]).toMatchObject({ t: 'run', mode: 'off' })
+    expect(unknown.events).toContainEqual({ t: 'error', text: 'The live taste graph is not available right now. The three examples still work.' })
+  })
+
+  it('tells the page live works when the key and the model are there', async () => {
+    const h = setup(true, live({ ai: 0 }))
+    expect(await (await call('/api/examples', {}, h)).json()).toEqual({ examples: EXAMPLES, live: true })
+  })
+
+  it('stops live runs for six hours after Qloo refuses the key, then tries again', async () => {
+    const count = { ai: 0 }
+    const h = setup(true, live(count))
+    await h.db.prepare('INSERT INTO recorded_runs (example, run) VALUES (?, ?)').bind(EXAMPLES[0], JSON.stringify(replay)).run()
+    let qlooCalls = 0
+    globalThis.fetch = (async () => { qlooCalls++; return Response.json({ message: 'Invalid API key' }, { status: 401 }) }) as typeof fetch
+    await mcpSearch(h)
+    expect(qlooCalls).toBe(1)
+
+    expect(await (await call('/api/examples', {}, h)).json()).toEqual({ examples: EXAMPLES, live: false })
+    const example = await stream('/api/scout', { message: EXAMPLES[0] }, h)
+    expect(example.events[0]).toMatchObject({ t: 'run', mode: 'replay' })
+    const unknown = await stream('/api/scout', { message: 'A new message about my aunt' }, h)
+    expect(unknown.events).toContainEqual({ t: 'error', text: 'The live taste graph is not available right now. The three examples still work.' })
+    expect(count.ai).toBe(0)
+    expect(qlooCalls).toBe(1)
+
+    await h.db.prepare('UPDATE qloo_cache SET expires_at = 0 WHERE key = ?').bind(QLOO_REFUSED_KEY).run()
+    expect(await (await call('/api/examples', {}, h)).json()).toEqual({ examples: EXAMPLES, live: true })
+    const again = await stream('/api/scout', { message: 'A new message about my aunt' }, h)
+    expect(again.events[0]).toMatchObject({ t: 'run', mode: 'live' })
   })
 })

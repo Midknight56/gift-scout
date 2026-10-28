@@ -172,7 +172,7 @@ describe('a scout turn', () => {
     const { d } = deps({ live: null, recorded: async () => [RECORDED] })
     const events = await turn(d, 'My uncle likes jazz')
     expect(events[0]).toMatchObject({ t: 'run', mode: 'off' })
-    expect(events.at(-1)).toMatchObject({ t: 'error', text: expect.stringMatching(/off right now.*examples still work/) })
+    expect(events.at(-1)).toMatchObject({ t: 'error', text: 'The live taste graph is not available right now. The three examples still work.' })
   })
 
   it('replays an example when the budget is spent, and makes no model call', async () => {

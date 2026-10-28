@@ -59,7 +59,7 @@ export async function compareTurn(conversationId: string, deps: CompareDeps, sen
     const run: ScoutEvent = { t: 'run', conversation: conversationId, turn: state.turn, mode: deps.live ? 'live' : 'off', purpose: 'compare', said: state.said[0] }
     await sendSaved(run)
     if (!deps.live) {
-      await sendSaved({ t: 'error', text: 'Comparing needs live scouting, which is off right now.' })
+      await sendSaved({ t: 'error', text: 'Comparing needs the live taste graph, which is not available right now.' })
     } else if (!(await deps.live.takeVisitorCompare())) {
       await sendSaved({ t: 'error', text: 'You have compared a lot today.' })
     } else {

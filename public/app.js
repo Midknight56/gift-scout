@@ -588,7 +588,11 @@ sheetClose.addEventListener('click', () => {
 fetch('/api/examples')
   .then((r) => (r.ok ? r.json() : Promise.reject(new Error('no examples'))))
   .then((data) => {
-    examples.innerHTML = (data.examples || []).slice(0, 3)
+    // With the live taste graph down (no key, a refused key, or Qloo's month spent), only the recorded examples run.
+    const off = data.live === false
+      ? '<p class="graph-off" role="status">The live taste graph is not available right now. These three examples still work from their recorded runs.</p>'
+      : '';
+    examples.innerHTML = off + (data.examples || []).slice(0, 3)
       .map((text) => `<button type="button" class="example-chip" data-example="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join('');
   })
   .catch(() => {});

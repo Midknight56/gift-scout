@@ -59,6 +59,11 @@ export class QlooOff extends QlooError {
   constructor() { super('Live Qloo is off right now, so only the three examples work.') }
 }
 
+/** Qloo answered 401 or 403: the key no longer works (it may stop after the contest's judging). */
+export class QlooRefused extends QlooError {
+  constructor() { super('The live taste graph is not available right now.') }
+}
+
 interface RawTag { id?: string; name?: string; type?: string; parents?: { type?: string }[] }
 
 function toTag(raw: RawTag): Tag {
@@ -121,6 +126,8 @@ export class QlooClient {
     private allow: () => Promise<boolean>,
     /** Receives a valid monthly remaining count from an upstream response, and the seconds until the month resets. */
     private onQuota?: (remaining: number, resetSeconds?: number) => void | Promise<void>,
+    /** Hears that Qloo refused the key, so the Worker can stop live runs for a while. */
+    private onRefused?: () => void | Promise<void>,
   ) {}
 
   /** With no type, Qloo ranks every kind together; measured 23 Oct 2026, that put "John le Carré" (an author, a type a
@@ -194,6 +201,10 @@ export class QlooClient {
         const resetSeconds = Number.isFinite(reset) && reset >= 0 ? reset : undefined
         try { void Promise.resolve(this.onQuota?.(remaining, resetSeconds)).catch(() => {}) } catch { /* quota bookkeeping never holds an answer */ }
       }
+    }
+    if (res.status === 401 || res.status === 403) {
+      try { void Promise.resolve(this.onRefused?.()).catch(() => {}) } catch { /* the mark never holds an answer */ }
+      throw new QlooRefused()
     }
     if (res.status === 429) throw new QlooBusy()
     if (res.status === 404) return { body: { results: [] }, cached: false } // the spec's "No results"

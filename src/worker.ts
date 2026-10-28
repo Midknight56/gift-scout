@@ -18,7 +18,7 @@ import { QlooClient, type Cache } from './qloo/client'
 import { Channel3Client } from './channel3/client'
 import { channel3Enabled } from './channel3/flag'
 import { qlooTools, type QlooContext } from './qloo/tools'
-import { Conversations, D1Cache, NeuronLedger, RunCache } from './store/d1'
+import { Conversations, D1Cache, NeuronLedger, QLOO_REFUSED_KEY, RunCache } from './store/d1'
 import { REPLAY_PACE_MS, DAILY_BUYS_PER_VISITOR, DAILY_COMPARES_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DAILY_CHANNEL3_CALLS, DAILY_CHANNEL3_CALLS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DEFAULT_ACCOUNT_NEURONS, dailyNeuronShare, MAX_CALL_NEURONS, QLOO_MONTH_FLOOR } from './limits'
 
 export interface Env {
@@ -106,6 +106,22 @@ async function qlooQuota(env: Env): Promise<number | null> {
   } catch { return null }
 }
 
+// A refused key is marked in qloo_cache under QLOO_REFUSED_KEY. The row expires by itself, so live is tried again after
+// the hold: one visitor's failed run every six hours at most, while the key stays refused.
+const QLOO_REFUSED_HOLD_SECONDS = 6 * 60 * 60
+
+async function qlooRefused(env: Env): Promise<boolean> {
+  try { return (await new D1Cache(env.DB).get(QLOO_REFUSED_KEY)) !== null } catch { return false }
+}
+
+/** Live scouting needs the model, a Qloo key Qloo still takes, and room in Qloo's month. */
+async function tasteGraphLive(env: Env): Promise<boolean> {
+  if (!env.AI || !env.QLOO_API_KEY) return false
+  const monthRemaining = await qlooQuota(env)
+  if (monthRemaining !== null && monthRemaining < QLOO_MONTH_FLOOR) return false
+  return !(await qlooRefused(env))
+}
+
 async function qlooFor(request: Request, env: Env, ctx?: ExecutionContext): Promise<QlooContext> {
   const visitor = await visitorOf(request, env.SESSION_SECRET)
   // Keep this client's newest observation immediately, while the shared D1 upsert runs in the background.
@@ -125,8 +141,13 @@ async function qlooFor(request: Request, env: Env, ctx?: ExecutionContext): Prom
     if (ctx) ctx.waitUntil(update)
     else void update.catch(() => {})
   }
+  const onRefused = () => {
+    const mark = new D1Cache(env.DB).put(QLOO_REFUSED_KEY, new Date().toISOString(), { expirationTtl: QLOO_REFUSED_HOLD_SECONDS })
+    if (ctx) ctx.waitUntil(mark)
+    else void mark.catch(() => {})
+  }
   // fetch is wrapped: Workers throw "Illegal invocation" when the global fetch is called detached.
-  return { qloo: new QlooClient(env.QLOO_API_KEY ?? '', (input, init) => fetch(input, init), cache, allow, onQuota) }
+  return { qloo: new QlooClient(env.QLOO_API_KEY ?? '', (input, init) => fetch(input, init), cache, allow, onQuota, onRefused) }
 }
 
 function channel3For(request: Request, env: Env): Channel3Client | null {
@@ -163,7 +184,8 @@ export default {
 
     if (path === '/health') return new Response('ok')
 
-    if (path === '/api/examples') return json({ examples: EXAMPLES })
+    // `live` lets the page say up front that only the recorded examples run.
+    if (path === '/api/examples') return json({ examples: EXAMPLES, live: await tasteGraphLive(env) })
 
     if (path.startsWith('/api/conversation/')) {
       const id = decodeURIComponent(path.slice('/api/conversation/'.length))
@@ -177,8 +199,7 @@ export default {
       if (origin && origin !== url.origin) return json({ error: 'Origin not allowed' }, 403)
       const parsed = await parseScout(request)
       if (!parsed.ok) return json({ error: parsed.text }, parsed.status)
-      const monthRemaining = await qlooQuota(env)
-      const monthlyLimitReached = monthRemaining !== null && monthRemaining < QLOO_MONTH_FLOOR
+      const live = await tasteGraphLive(env)
       const visitor = await visitorOf(request, env.SESSION_SECRET)
       const budget = ledgerFor(env)
       const stream = ndjsonResponse()
@@ -187,7 +208,7 @@ export default {
         runs: new RunCache(env.DB),
         recorded: () => recordedRunsFromD1(env.DB),
         tools: qlooTools(),
-        live: !monthlyLimitReached && env.QLOO_API_KEY && env.AI
+        live: live && env.AI
           ? {
               model: new WorkersAiModel(env.AI), ctx: await qlooFor(request, env, ctx), budget,
               takeVisitorTurn: () => counter(env, 'turns:' + visitor).take(today(), Number(env.TURNS_PER_VISITOR ?? DAILY_TURNS_PER_VISITOR)),
@@ -249,7 +270,7 @@ export default {
       const stream = ndjsonResponse()
       const work = compareTurn(parsed.conversation, {
         conversations: new Conversations(env.DB),
-        live: env.AI && env.QLOO_API_KEY
+        live: env.AI && (await tasteGraphLive(env))
           ? {
               model: new WorkersAiModel(env.AI), qloo: (await qlooFor(request, env, ctx)).qloo, budget: ledgerFor(env),
               takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), DAILY_COMPARES_PER_VISITOR),

@@ -13,6 +13,9 @@ interface D1Like { prepare(sql: string): { bind(...v: unknown[]): Stmt } }
 interface CacheRow { body: string; expires_at: number }
 interface ConversationRow { state: string; turns: string }
 
+/** The qloo_cache key that marks a Qloo key Qloo refused (401 or 403); see tasteGraphLive in src/worker.ts. */
+export const QLOO_REFUSED_KEY = 'status:qloo-refused'
+
 export class D1Cache implements Cache {
   constructor(private db: D1Like, private now: () => number = Date.now) {}
 

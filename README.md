@@ -20,6 +20,16 @@ login. Nothing here costs real money.
 
 Built for this contest: the first commit was on 22 Oct 2026. Everything in this repo was written after 1 Oct.
 
+### The PayPal purchase in 60 seconds
+
+1. Tap the same example, then "Buy this one" on any card.
+2. Choose "Pay with the test card". No PayPal login is needed, and a sandbox address is already filled in.
+3. Watch "Behind the scenes": the PayPal order, the capture, and the PayPal tracker, which shows only the city. Then tap
+   "Changed my mind" to refund the capture through PayPal.
+
+If the live taste graph is not available, the page says so before you type, the three examples run from their recorded
+runs, and buying still works.
+
 ## What a run looks like
 
 The "How it works" button in the top bar opens a sheet with four short steps.
@@ -145,7 +155,9 @@ apps on one account; point it at your own database or remove it, and the app cou
 A visitor never costs money. Every model call is counted in neurons (Workers AI's own count) against a daily budget,
 and each visitor has a daily number of turns. Every Qloo answer is cached for 60 days, so a repeated question costs
 nothing, and the same first message is answered again from the first run. When live scouting is not possible (no
-budget left, or no Qloo key), the three example messages replay recorded runs, marked as recorded with their date.
+budget left, no Qloo key, or a key Qloo refuses), the page says the live taste graph is not available, and the three
+example messages replay recorded runs, marked as recorded with their date. After Qloo refuses the key, live is tried
+again only after six hours.
 
 The replay data is not in this repository because Qloo's terms keep its answers out of public repositories. To make the three examples replay on your own deploy, run `tools/record_samples.py` and then `tools/seed_replay.py`.
 
@@ -162,19 +174,32 @@ The replay data is not in this repository because Qloo's terms keep its answers 
 | Webhook: a forged event | 401 | |
 | Webhook: a genuine PayPal event | 200, verified | WH-19E71976UR098271U-3H1177824C326720G |
 
+Finishing the purchase, 28 Oct 2026 (`tools/sandbox_finish_purchase.py`):
+
+| Check | Answer | Id |
+| --- | --- | --- |
+| Order with a shipping address, paid with the test card | 201, COMPLETED | 41N17594ND240981T, capture 8SM24797JH232704N |
+| Tracker on that capture (`POST /v2/checkout/orders/{id}/track`) | 201, SHIPPED | 8SM24797JH232704N-GS1793219553 |
+| The order read back | 200, tracker present | |
+| Refund of that capture (`POST /v2/payments/captures/{id}/refund`) | 201, COMPLETED | 6K171181BB381373J |
+| Order for approval with the address (`SET_PROVIDED_ADDRESS`) | 200, PAYER_ACTION_REQUIRED | 72R34993FR890770D |
+
+The street goes to PayPal only. Gift Scout keeps "City, ST" with the conversation, because a share link shows the
+conversation to anyone.
+
 ## Files
 
 | Path | What it holds |
 | --- | --- |
 | `src/agent/` | The agent: the plan, the tool loop, the card checks, the buy turn, the model client |
 | `src/qloo/` | The Qloo client and the three tools |
-| `src/paypal/` | The PayPal Orders v2 client |
+| `src/paypal/` | The PayPal client: Orders v2 with shipping, trackers and refunds |
 | `src/app/` | The scout and buy endpoints |
 | `src/mcp/` | The MCP server |
 | `src/store/` | D1 storage: the Qloo cache, conversations, the neuron ledger |
 | `public/` | The page |
-| `tools/` | `demo_check.py` runs the three examples and judges them; `quality_check.py` checks ten messages a judge might type; `record_samples.py` records the examples; `public_check.py` scans before the repo goes public; `evening.py` runs the live checks as one command; `e2e.mjs` plays a visitor from the empty page to a paid gift in a browser; `phones.mjs` measures the page at 14 phone and tablet widths; `film.mjs` films the demo for the video |
-| `tests/unit/` | 339 unit tests |
+| `tools/` | `demo_check.py` runs the three examples and judges them; `quality_check.py` checks ten messages a judge might type; `record_samples.py` records the examples; `public_check.py` scans before the repo goes public; `evening.py` runs the live checks as one command; `e2e.mjs` plays a visitor from the empty page to a paid gift in a browser; `phones.mjs` measures the page at 14 phone and tablet widths; `film.mjs` films the demo for the video; `sandbox_finish_purchase.py` proves shipping, the tracker and the refund in the sandbox |
+| `tests/unit/` | 359 unit tests |
 
 ## Licence
 

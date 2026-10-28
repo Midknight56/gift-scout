@@ -228,7 +228,7 @@ describe('POST /api/compare', () => {
     const { events } = await request(h, await ownerToken(h.id, 'test'))
     expect(events).toMatchObject([
       { t: 'run', mode: 'off', purpose: 'compare' },
-      { t: 'error', text: 'Comparing needs live scouting, which is off right now.' },
+      { t: 'error', text: 'Comparing needs the live taste graph, which is not available right now.' },
       { t: 'done' },
     ])
   })
