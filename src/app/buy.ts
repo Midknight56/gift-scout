@@ -1,10 +1,11 @@
 // POST /api/buy   the "Buy this one" tap: one buy turn of the agent, streamed like a scout turn, ending in an order.
 // GET  /paid      PayPal sends the buyer back here after approval: the order is captured and the conversation shows it.
+// POST /api/refund "Changed my mind": the capture is refunded in full and the conversation shows it.
 import type { Budget, ConversationState } from '../agent/agent'
-import { runBuyTurn, type PayMethod, type Purchase } from '../agent/buy'
+import { runBuyTurn, trackShipment, type PayMethod, type Purchase } from '../agent/buy'
 import type { ScoutEvent } from '../agent/events'
 import type { Model } from '../agent/model'
-import { PayPalError, type PayPal } from '../paypal/client'
+import { PayPalError, type PayPal, type Shipping } from '../paypal/client'
 import { parseEvent } from '../paypal/webhook'
 import type { Conversations } from '../store/d1'
 
@@ -32,6 +33,18 @@ function sameAmount(left: string, right: string): boolean {
     return Number.isFinite(amount) && Math.round(amount * 100)
   }
   return cents(left) === cents(right)
+}
+
+/** Adds an event to the turn that holds this order's order or paid event. */
+function appendToOrderTurn(turns: ScoutEvent[][], orderId: string, event: ScoutEvent): ScoutEvent[][] {
+  const index = turns.findIndex((events) => events.some((e) => (e.t === 'order' || e.t === 'paid') && e.order_id === orderId))
+  return index < 0 ? turns : turns.map((events, i) => (i === index ? [...events, event] : events))
+}
+
+/** After markPaid: a tracker when the order has an address. The purchase is the one inside `paid.state`. */
+async function withTracker(paid: { state: State; turns: ScoutEvent[][] }, purchase: Purchase, paypal: PayPal, now: () => number) {
+  const shipped = await trackShipment(paypal, purchase, now)
+  return shipped ? { state: paid.state, turns: appendToOrderTurn(paid.turns, purchase.order_id, shipped) } : paid
 }
 
 function markPaid(saved: { state: ConversationState; turns: ScoutEvent[][] }, purchase: Purchase, orderId: string, captureId: string, amount: string, now: () => number): { state: State; turns: ScoutEvent[][] } {
@@ -96,7 +109,7 @@ async function answerWebhook(request: Request, deps: { conversations: Conversati
     const freshState = fresh?.state as State | undefined
     const freshPurchase = freshState?.purchases?.find((p) => p.order_id === event.orderId)
     if (!fresh || !freshState || !freshPurchase || freshPurchase.status === 'captured' || fresh.turns.flat().some((e) => e.t === 'paid' && (e.order_id === event.orderId || e.capture_id === captureId))) return Response.json({ status: 'ok' }, { headers: { 'X-Event-Type': event.type } })
-    const updated = markPaid(fresh, freshPurchase, event.orderId!, captureId, amount, deps.now ?? Date.now)
+    const updated = await withTracker(markPaid(fresh, freshPurchase, event.orderId!, captureId, amount, deps.now ?? Date.now), freshPurchase, deps.paypal!, deps.now ?? Date.now)
     await deps.conversations.put(conversationId, updated.state, updated.turns)
     return Response.json({ status: 'ok' }, { headers: { 'X-Event-Type': event.type } })
   })
@@ -126,14 +139,66 @@ export async function tokenMatchesOwner(conversationId: string, token: unknown, 
   return difference === 0
 }
 
-export async function parseBuy(request: Request): Promise<{ conversation: string; card: string; method: PayMethod; owner?: string } | null> {
-  const body = (await request.json().catch(() => null)) as { conversation?: unknown; card?: unknown; method?: unknown; owner?: unknown } | null
-  const ok = (v: unknown, re: RegExp) => typeof v === 'string' && re.test(v)
-  if (!body || !ok(body.conversation, /^[A-Za-z0-9_-]{6,48}$/) || !ok(body.card, /^t\d{1,2}c\d{1,2}$/)) return null
-  return { conversation: body.conversation as string, card: body.card as string, method: body.method === 'card' ? 'card' : 'paypal', owner: typeof body.owner === 'string' ? body.owner : undefined }
+/** A US address, or null when any field is missing or malformed. */
+export function parseShipping(value: unknown): Shipping | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const v = value as Record<string, unknown>
+  const text = (x: unknown, max: number) => (typeof x === 'string' && x.trim().length >= 1 && x.trim().length <= max && !/[\u0000-\u001f<>]/.test(x) ? x.trim() : null)
+  const name = text(v.name, 60), line1 = text(v.line1, 100), city = text(v.city, 60)
+  const state = typeof v.state === 'string' && /^[A-Za-z]{2}$/.test(v.state.trim()) ? v.state.trim().toUpperCase() : null
+  const postal = typeof v.postal === 'string' && /^\d{5}$/.test(v.postal.trim()) ? v.postal.trim() : null
+  return name && line1 && city && state && postal ? { name, line1, city, state, postal } : null
 }
 
-export async function buyTurn(conversationId: string, cardId: string, deps: BuyDeps, send: (e: ScoutEvent) => Promise<void>, method: PayMethod = 'paypal', owner?: string): Promise<void> {
+export async function parseBuy(request: Request): Promise<{ conversation: string; card: string; method: PayMethod; owner?: string; ship?: Shipping } | null> {
+  const body = (await request.json().catch(() => null)) as { conversation?: unknown; card?: unknown; method?: unknown; owner?: unknown; ship?: unknown } | null
+  const ok = (v: unknown, re: RegExp) => typeof v === 'string' && re.test(v)
+  if (!body || !ok(body.conversation, /^[A-Za-z0-9_-]{6,48}$/) || !ok(body.card, /^t\d{1,2}c\d{1,2}$/)) return null
+  const ship = body.ship === undefined ? undefined : parseShipping(body.ship)
+  if (ship === null) return null
+  return { conversation: body.conversation as string, card: body.card as string, method: body.method === 'card' ? 'card' : 'paypal', owner: typeof body.owner === 'string' ? body.owner : undefined, ...(ship ? { ship } : {}) }
+}
+
+/** "Changed my mind": a full refund of a paid gift, for the tab that started the conversation only. No model call. */
+export async function refundPurchase(
+  req: { conversation: string; card: string; owner?: string },
+  deps: { conversations: Conversations; paypal: PayPal | null; ownerSecret: string; now?: () => number },
+): Promise<{ status: number; event?: ScoutEvent; error?: string }> {
+  if (!(await tokenMatchesOwner(req.conversation, req.owner, deps.ownerSecret))) return { status: 403, error: 'Only the person who bought it can refund it.' }
+  if (!deps.paypal) return { status: 503, error: 'Refunds are off right now.' }
+  const paypal = deps.paypal
+  const saved = await deps.conversations.get(req.conversation)
+  const purchase = (saved?.state as State | undefined)?.purchases?.find((p) => p.card === req.card && p.status !== 'created')
+  if (!saved || !purchase?.capture_id) return { status: 409, error: 'That gift has not been paid for.' }
+  return withOrderLock(req.conversation + ':' + purchase.order_id, async () => {
+    const fresh = await deps.conversations.get(req.conversation)
+    const state = fresh?.state as State | undefined
+    const current = state?.purchases?.find((p) => p.order_id === purchase.order_id)
+    if (!fresh || !state || !current?.capture_id) return { status: 409, error: 'That gift has not been paid for.' }
+    if (current.status === 'refunded') return { status: 409, error: 'That gift was already refunded.' }
+    let refund
+    try { refund = await paypal.refund(current.capture_id) } catch (e) {
+      console.log(`paypal refund failed ${current.order_id} ${e instanceof PayPalError ? e.status : ''}`)
+      return { status: 502, error: 'PayPal did not take the refund. Nothing changed.' }
+    }
+    if (refund.status !== 'COMPLETED' && refund.status !== 'PENDING') return { status: 502, error: 'PayPal did not complete the refund. Check PayPal.' }
+    const at = new Date((deps.now ?? Date.now)()).toISOString()
+    current.status = 'refunded'
+    current.refund_id = refund.id
+    const event: ScoutEvent = { t: 'refunded', card: current.card, gift: current.gift, order_id: current.order_id, capture_id: current.capture_id, refund_id: refund.id, amount: current.amount, at }
+    await deps.conversations.put(req.conversation, state, appendToOrderTurn(fresh.turns, current.order_id, event))
+    return { status: 200, event }
+  })
+}
+
+export async function parseRefund(request: Request): Promise<{ conversation: string; card: string; owner?: string } | null> {
+  const body = (await request.json().catch(() => null)) as { conversation?: unknown; card?: unknown; owner?: unknown } | null
+  const ok = (v: unknown, re: RegExp) => typeof v === 'string' && re.test(v)
+  if (!body || !ok(body.conversation, /^[A-Za-z0-9_-]{6,48}$/) || !ok(body.card, /^t\d{1,2}c\d{1,2}$/)) return null
+  return { conversation: body.conversation as string, card: body.card as string, owner: typeof body.owner === 'string' ? body.owner : undefined }
+}
+
+export async function buyTurn(conversationId: string, cardId: string, deps: BuyDeps, send: (e: ScoutEvent) => Promise<void>, method: PayMethod = 'paypal', owner?: string, shipping?: Shipping): Promise<void> {
   if (!(await tokenMatchesOwner(conversationId, owner, deps.ownerSecret))) return
   const saved = await deps.conversations.get(conversationId)
   if (!saved) { await send({ t: 'error', text: 'That conversation has gone. Start a new one.' }); return }
@@ -154,7 +219,7 @@ export async function buyTurn(conversationId: string, cardId: string, deps: BuyD
   const events: ScoutEvent[] = [run]
   await send(run)
   const next = await runBuyTurn({
-    cardId, method, state, model: deps.live.model, budget: deps.live.budget, paypal: deps.paypal, origin: deps.origin, now: deps.now,
+    cardId, method, shipping, state, model: deps.live.model, budget: deps.live.budget, paypal: deps.paypal, origin: deps.origin, now: deps.now,
     emit: async (e) => {
       events.push(e); await send(e)
     },
@@ -204,7 +269,7 @@ export async function paidReturn(url: URL, deps: { conversations: Conversations;
     const freshState = fresh?.state as State | undefined
     const freshPurchase = freshState?.purchases?.find((p) => p.order_id === orderId)
     if (!fresh || !freshState || !freshPurchase || freshPurchase.status === 'captured' || fresh.turns.flat().some((e) => e.t === 'paid' && (e.order_id === orderId || e.capture_id === cap.captureId))) return back
-    const updated = markPaid(fresh, freshPurchase, orderId, cap.captureId, cap.amount, deps.now ?? Date.now)
+    const updated = await withTracker(markPaid(fresh, freshPurchase, orderId, cap.captureId, cap.amount, deps.now ?? Date.now), freshPurchase, deps.paypal!, deps.now ?? Date.now)
     await deps.conversations.put(c, updated.state, updated.turns)
     return back
   })

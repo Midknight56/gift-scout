@@ -2,6 +2,9 @@
 // Scout order carries a custom_id that starts with "gs-", so the shared sandbox app's other apps never touch ours.
 // Measured 23 Oct 2026 with the shared app: token 200, create 200 (PAYER_ACTION_REQUIRED, a payer-action link),
 // buyer approval in the sandbox, capture 201 COMPLETED, refund 201 COMPLETED.
+// Measured 28 Oct 2026 (tools/sandbox_finish_purchase.py): an order with a shipping address paid with the test card 201
+// COMPLETED, a tracker on its capture 201 SHIPPED, the order read back 200 with the tracker, the refund 201 COMPLETED, and an
+// order for approval with SET_PROVIDED_ADDRESS 200 PAYER_ACTION_REQUIRED.
 
 export const PAYPAL_SANDBOX = 'https://api-m.sandbox.paypal.com'
 
@@ -15,6 +18,10 @@ export interface Order { id: string; status: string; approveUrl?: string; custom
  *  talks to api-m.sandbox.paypal.com. Measured 23 Oct 2026: an order paid with it answered 201 COMPLETED in one call. */
 export const SANDBOX_TEST_CARD = { number: '4111111111111111', expiry: '2030-12', security_code: '123', name: 'Gift Scout Judge' }
 export interface Capture { orderId: string; status: string; captureId: string; amount: string; customId?: string }
+/** Where the gift goes. US only: a two letter state and a five digit ZIP. */
+export interface Shipping { name: string; line1: string; city: string; state: string; postal: string }
+export interface Tracker { id: string; status: string }
+export interface Refund { id: string; status: string }
 
 export class PayPal {
   private token?: { value: string; until: number }
@@ -81,14 +88,16 @@ export class PayPal {
    *  buyer to approve at PayPal's link. `requestId` makes a repeat of the same tap the same order. */
   async createOrder(o: {
     amount: string; customId: string; description: string; returnUrl: string; cancelUrl: string; requestId: string
-    card?: typeof SANDBOX_TEST_CARD
+    card?: typeof SANDBOX_TEST_CARD; shipping?: Shipping
   }): Promise<Order> {
     const source = o.card
       ? { card: o.card }
-      : { paypal: { experience_context: { brand_name: 'Gift Scout', user_action: 'PAY_NOW', shipping_preference: 'NO_SHIPPING', return_url: o.returnUrl, cancel_url: o.cancelUrl } } }
+      : { paypal: { experience_context: { brand_name: 'Gift Scout', user_action: 'PAY_NOW', shipping_preference: o.shipping ? 'SET_PROVIDED_ADDRESS' : 'NO_SHIPPING', return_url: o.returnUrl, cancel_url: o.cancelUrl } } }
+    const shipping = o.shipping && { type: 'SHIPPING', name: { full_name: o.shipping.name }, address: {
+      address_line_1: o.shipping.line1, admin_area_2: o.shipping.city, admin_area_1: o.shipping.state, postal_code: o.shipping.postal, country_code: 'US' } }
     const out = await this.call('/v2/checkout/orders', {
       intent: 'CAPTURE',
-      purchase_units: [{ custom_id: o.customId, description: o.description.slice(0, 127), amount: { currency_code: 'USD', value: o.amount } }],
+      purchase_units: [{ custom_id: o.customId, description: o.description.slice(0, 127), amount: { currency_code: 'USD', value: o.amount }, ...(shipping ? { shipping } : {}) }],
       payment_source: source,
     }, o.requestId)
     if (typeof out.id !== 'string' || !out.id || typeof out.status !== 'string' || !out.status) {
@@ -112,6 +121,24 @@ export class PayPal {
     const cap = unit?.payments?.captures?.[0]
     if (!cap || typeof cap.id !== 'string' || !cap.id || typeof cap.status !== 'string' || typeof cap.amount?.value !== 'string') throw new PayPalError('PayPal gave no capture', 502)
     return { orderId, status: cap.status, captureId: cap.id, amount: cap.amount.value, customId: cap.custom_id ?? unit?.custom_id }
+  }
+
+  /** A tracker on a paid order's capture, so the buyer sees it on its way. One per capture: a repeat is the same tracker. */
+  async addTracker(orderId: string, captureId: string, trackingNumber: string): Promise<Tracker> {
+    const out = await this.call(`/v2/checkout/orders/${encodeURIComponent(orderId)}/track`, {
+      capture_id: captureId, tracking_number: trackingNumber, carrier: 'OTHER', carrier_name_other: 'Gift Scout sandbox', notify_payer: false,
+    }, 'track-' + captureId)
+    const trackers = (out.purchase_units as { shipping?: { trackers?: { id?: unknown; status?: unknown }[] } }[] | undefined)?.[0]?.shipping?.trackers ?? []
+    const tracker = trackers.find((t) => typeof t.id === 'string' && t.id.startsWith(captureId)) ?? trackers[0]
+    if (!tracker || typeof tracker.id !== 'string' || typeof tracker.status !== 'string') throw new PayPalError('PayPal gave no tracker', 502)
+    return { id: tracker.id, status: tracker.status }
+  }
+
+  /** A full refund of a capture. One per capture: a repeat is the same refund. */
+  async refund(captureId: string): Promise<Refund> {
+    const out = await this.call(`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, {}, 'refund-' + captureId)
+    if (typeof out.id !== 'string' || !out.id || typeof out.status !== 'string') throw new PayPalError('PayPal gave no refund', 502)
+    return { id: out.id, status: out.status }
   }
 
   /** Ask PayPal to verify a webhook against its original, unmodified event body. */

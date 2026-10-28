@@ -1,6 +1,6 @@
 // The Gift Scout page: sends a message, reads the agent's events as they stream (NDJSON, see src/agent/events.ts), and
 // draws the chat on the left and every Qloo call on the right. A conversation keeps its panel across turns.
-import { cardHtml, callRowHtml, compareHtml, escapeHtml, orderRowHtml, paidRowHtml, panelSummary, walkSvg } from './render.js';
+import { cardHtml, callRowHtml, compareHtml, escapeHtml, orderRowHtml, paidRowHtml, panelSummary, refundRowHtml, shippedRowHtml, walkSvg } from './render.js';
 
 const $ = (selector) => document.querySelector(selector);
 const chat = $('#chat-log');
@@ -255,6 +255,31 @@ function handleEvent(event, { live = true } = {}) {
       holder.innerHTML = paidRowHtml(event);
       callsList.append(holder.firstElementChild);
       addLine('say-line', `Paid in the PayPal sandbox: $${event.amount} for ${event.gift}.`);
+      // Only the tab that bought it may refund it; a share page opened anywhere else shows no button.
+      if (conversation && ownerFor(conversation)) {
+        const refund = document.createElement('button');
+        refund.type = 'button';
+        refund.className = 'buy-button quiet refund-button';
+        refund.dataset.refund = event.card;
+        refund.textContent = 'Changed my mind';
+        chat.append(refund);
+        scrollChat();
+      }
+      break;
+    }
+    case 'shipped': {
+      const holder = document.createElement('div');
+      holder.innerHTML = shippedRowHtml(event);
+      callsList.append(holder.firstElementChild);
+      addLine('say-line', `On its way${event.ship_to ? ` to ${event.ship_to}` : ''}. PayPal tracker ${event.tracking_number}.`);
+      break;
+    }
+    case 'refunded': {
+      const holder = document.createElement('div');
+      holder.innerHTML = refundRowHtml(event);
+      callsList.append(holder.firstElementChild);
+      chat.querySelector(`[data-refund="${CSS.escape(event.card)}"]`)?.remove();
+      addLine('say-line', `Refunded in the PayPal sandbox: $${event.amount} back for ${event.gift}.`);
       break;
     }
     case 'say':
@@ -337,15 +362,29 @@ async function submitMessage(message) {
   }
 }
 
-async function buyCard(cardId, method) {
+/** The ship to fields under a card's pay buttons, or an error line naming what is missing. */
+function readShipping(actions) {
+  const form = actions?.querySelector('.ship-form');
+  if (!form) return { ship: undefined };
+  const value = (name) => form.querySelector(`[name="${name}"]`).value.trim();
+  const ship = { name: value('ship-name'), line1: value('ship-line1'), city: value('ship-city'), state: value('ship-state').toUpperCase(), postal: value('ship-postal') };
+  if (!ship.name || !ship.line1 || !ship.city) return { error: 'Add a name, a street and a city to ship to.' };
+  if (!/^[A-Z]{2}$/.test(ship.state)) return { error: 'Use the two letter state, like CA.' };
+  if (!/^\d{5}$/.test(ship.postal)) return { error: 'Use a five digit ZIP code.' };
+  return { ship };
+}
+
+async function buyCard(cardId, method, actions) {
   if (busy || !conversation) return;
+  const { ship, error } = readShipping(actions);
+  if (error) { addLine('error-line', error); return; }
   busy = true;
   chat.querySelectorAll('.buy-button').forEach((b) => { b.disabled = true; });
   try {
     const response = await fetch('/api/buy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversation, card: cardId, method, owner: ownerFor(conversation) }),
+      body: JSON.stringify({ conversation, card: cardId, method, owner: ownerFor(conversation), ...(ship ? { ship } : {}) }),
     });
     if (!response.ok || !response.body) throw new Error('The purchase could not start. Nothing was charged.');
     await readEvents(response);
@@ -354,6 +393,30 @@ async function buyCard(cardId, method) {
   } finally {
     busy = false;
     chat.querySelectorAll('.buy-button').forEach((b) => { b.disabled = false; });
+  }
+}
+
+/** "Changed my mind": a full refund of the paid gift. No model call; only the tab that bought it can ask. */
+async function refundCard(button) {
+  if (busy || !conversation) return;
+  busy = true;
+  button.disabled = true;
+  button.textContent = 'Refunding';
+  try {
+    const response = await fetch('/api/refund', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation, card: button.dataset.refund, owner: ownerFor(conversation) }),
+    });
+    const out = await response.json().catch(() => ({}));
+    if (!response.ok || !out.event) throw new Error(out.error || 'PayPal did not take the refund. Nothing changed.');
+    handleEvent(out.event);
+  } catch (error) {
+    addLine('error-line', error instanceof Error ? error.message : 'PayPal did not take the refund. Nothing changed.');
+    button.disabled = false;
+    button.textContent = 'Changed my mind';
+  } finally {
+    busy = false;
   }
 }
 
@@ -388,7 +451,15 @@ function showPayChoice(button) {
   const productTitle = button.closest('.gift-card').querySelector('.product-title')?.textContent;
   const actions = button.closest('.card-actions');
   actions.classList.add('pay-choice');
+  // A made up address fills the form so a judge can pay in one tap. Only the city and state are kept after the order.
   actions.innerHTML = '<p class="pay-note">PayPal sandbox, no real money.</p>'
+    + '<fieldset class="ship-form"><legend>Ship to (any US address works in the sandbox)</legend>'
+    + '<input name="ship-name" aria-label="Name" value="Sam Rivera" maxlength="60" autocomplete="off">'
+    + '<input name="ship-line1" aria-label="Street" value="1 Main St" maxlength="100" autocomplete="off">'
+    + '<input name="ship-city" aria-label="City" value="San Jose" maxlength="60" autocomplete="off">'
+    + '<input name="ship-state" aria-label="State" value="CA" maxlength="2" autocomplete="off">'
+    + '<input name="ship-postal" aria-label="ZIP code" value="95131" maxlength="5" inputmode="numeric" autocomplete="off">'
+    + '</fieldset>'
     + `<button type="button" class="buy-button" data-pay="paypal" data-card="${escapeHtml(card)}">Pay at PayPal</button>`
     + `<button type="button" class="buy-button quiet" data-pay="card" data-card="${escapeHtml(card)}">Pay with the test card</button>`;
   if (productTitle) actions.querySelector('.pay-note').textContent = `Paying for ${productTitle}. PayPal sandbox, no real money.`;
@@ -466,7 +537,9 @@ chat.addEventListener('click', (e) => {
   const compare = e.target.closest('[data-compare]');
   if (compare) { compareWithQlooOff(compare); return; }
   const pay = e.target.closest('[data-pay]');
-  if (pay) { buyCard(pay.dataset.card, pay.dataset.pay); return; }
+  if (pay) { buyCard(pay.dataset.card, pay.dataset.pay, pay.closest('.card-actions')); return; }
+  const refund = e.target.closest('[data-refund]');
+  if (refund) { refundCard(refund); return; }
   const buy = e.target.closest('[data-buy]');
   if (buy) { showPayChoice(buy); return; }
   const link = e.target.closest('[data-call]');

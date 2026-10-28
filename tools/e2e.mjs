@@ -8,7 +8,8 @@
 //
 // Happy path: example 2, six cards with Qloo's split in the cards, panel and share page, the panel's Qloo calls,
 // "Compare with Qloo off", Qloo's scores for the plain model's picks, "Make it cheaper, under 30 dollars.", "Buy this one", PayPal sandbox approval as the sandbox buyer, back to the share page with
-// the capture row. Bad paths: a two letter message, a share link that never existed, a /paid link Gift Scout never made,
+// the capture row, the PayPal tracker with only the city on the page, and "Changed my mind" refunding the capture. Bad paths:
+// a four digit ZIP, a refund without or with a wrong owner token, a second refund, a two letter message, a share link that never existed, a /paid link Gift Scout never made,
 // a stranger seeing no buy button or compare button, a compare without the owner token, a second compare, a buy without the owner token, and a buy with a wrong owner token.
 // The sandbox buyer's login is read from the secrets file at run time and never printed.
 // Run it through the shared browser lock: python A:/Projects/shipatonv2/tools/pw_lock.py run gift-scout -- node tools/e2e.mjs ...
@@ -216,6 +217,14 @@ async function main() {
     check('the narrowing turn keeps every card at 30 dollars or less', highs.length > 0 && highs.every((h) => h <= 30), prices.join(', '))
 
     await page.locator('[data-buy]').first().click()
+    // Bad path: an address PayPal could not ship to is caught on the page, and no order is made.
+    const zip = page.locator('.ship-form [name="ship-postal"]').first()
+    check('the pay choice asks where the gift goes', await zip.count() === 1)
+    await zip.fill('9513')
+    await page.locator(PAY === 'testcard' ? '[data-pay="card"]' : '[data-pay="paypal"]').first().click()
+    await page.waitForTimeout(500)
+    check('a four digit ZIP is refused and nothing is ordered', /five digit ZIP/i.test(await page.locator('.error-line').last().innerText()) && await page.locator('.pay-row').count() === 0)
+    await zip.fill('95131')
     if (PAY === 'testcard') {
       await page.locator('[data-pay="card"]').first().click()
       await page.locator('.pay-row.paid').waitFor({ timeout: 120000 })
@@ -227,6 +236,28 @@ async function main() {
     }
     const paid = await page.locator('.pay-row.paid').innerText()
     check('back at Gift Scout, the panel shows the capture', /capture [A-Z0-9]{10,}/.test(paid), paid.replace(/\s+/g, ' ').slice(0, 120))
+    await page.locator('.pay-row.shipped').waitFor({ timeout: 30000 })
+    const shipped = await page.locator('.pay-row.shipped').innerText()
+    check('the panel shows the PayPal tracker and only the city', /On its way to San Jose, CA/.test(shipped) && /Tracking GS[A-Z0-9]{10,}/.test(shipped) && !/Main St/.test(await page.content()), shipped.replace(/\s+/g, ' ').slice(0, 120))
+
+    // Bad paths for the refund: a stranger and a missing owner token are refused before PayPal is asked.
+    // The conversation and its owner token are the ones this tab keeps in sessionStorage (one conversation in this run).
+    const refundCard = await page.locator('[data-refund]').first().getAttribute('data-refund')
+    const refundStatus = (owner) => page.evaluate(async ({ owner, card }) => {
+      const key = Object.keys(sessionStorage).find((k) => k.startsWith('gift-scout-owner:'))
+      const body = { conversation: key.slice('gift-scout-owner:'.length), card, ...(owner === 'mine' ? { owner: sessionStorage.getItem(key) } : owner ? { owner } : {}) }
+      const res = await fetch('/api/refund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      return res.status
+    }, { owner, card: refundCard })
+    check('a refund without the owner token is refused', await refundStatus(null) === 403)
+    check('a refund with a wrong owner token is refused', await refundStatus('0'.repeat(64)) === 403)
+
+    await page.locator('[data-refund]').first().click()
+    await page.locator('.pay-row.refunded').waitFor({ timeout: 60000 })
+    const refunded = await page.locator('.pay-row.refunded').innerText()
+    check('"Changed my mind" refunds the capture in the PayPal sandbox', /refund [A-Z0-9]{10,}/.test(refunded), refunded.replace(/\s+/g, ' ').slice(0, 120))
+    check('the refund button is gone after the refund', await page.locator('[data-refund]').count() === 0)
+    check('a second refund is refused', await refundStatus('mine') === 409)
     check('no script error on any page', errors.length === 0, errors.join(' | '))
   } catch (e) {
     check('the run reached its end', false, String(e).split('\n')[0])

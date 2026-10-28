@@ -71,4 +71,8 @@ export type ScoutEvent =
   | { t: 'order'; card: string; gift: string; order_id: string; amount: string; approve_url?: string; method?: 'paypal' | 'card'; product_title?: string; product_url?: string }
   /** The order was approved and captured. */
   | { t: 'paid'; card: string; gift: string; order_id: string; capture_id: string; amount: string; at: string; product_title?: string; product_url?: string }
+  /** A PayPal tracker was added to the capture. `ship_to` is the city and state only: a share link never shows the street. */
+  | { t: 'shipped'; card: string; order_id: string; capture_id: string; tracker_id: string; tracking_number: string; ship_to?: string; at: string }
+  /** The buyer changed their mind and the capture was refunded in full. */
+  | { t: 'refunded'; card: string; gift: string; order_id: string; capture_id: string; refund_id: string; amount: string; at: string }
   | { t: 'done'; share: string }

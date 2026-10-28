@@ -8,7 +8,7 @@
 //   GET  /health                 ok
 import { DurableObject } from 'cloudflare:workers'
 import { WorkersAiModel, type AiBinding } from './agent/model'
-import { buyTurn, handleWebhook, ownerToken, paidReturn, parseBuy, tokenMatchesOwner } from './app/buy'
+import { buyTurn, handleWebhook, ownerToken, paidReturn, parseBuy, parseRefund, refundPurchase, tokenMatchesOwner } from './app/buy'
 import { compareTurn, parseCompare } from './app/compare'
 import { EXAMPLES, ndjsonResponse, parseScout, scoutTurn, type RecordedRun } from './app/scout'
 import { previewFor, sharePage } from './app/share'
@@ -221,11 +221,21 @@ export default {
           : null,
         origin: url.origin,
         ownerSecret: env.SESSION_SECRET,
-      }, stream.send, parsed.method, parsed.owner)
+      }, stream.send, parsed.method, parsed.owner, parsed.ship)
         .catch(async () => { await stream.send({ t: 'error', text: 'Something broke on our side. Check PayPal before trying again.' }) })
         .finally(() => stream.close())
       ctx.waitUntil(work)
       return stream.response
+    }
+
+    if (path === '/api/refund') {
+      if (request.method !== 'POST') return new Response(null, { status: 405, headers: { Allow: 'POST' } })
+      const origin = request.headers.get('Origin')
+      if (origin && origin !== url.origin) return json({ error: 'Origin not allowed' }, 403)
+      const parsed = await parseRefund(request)
+      if (!parsed) return json({ error: 'Send a conversation and a card.' }, 400)
+      const out = await refundPurchase(parsed, { conversations: new Conversations(env.DB), paypal: paypalFor(env), ownerSecret: env.SESSION_SECRET })
+      return json(out.event ? { event: out.event } : { error: out.error }, out.status)
     }
 
     if (path === '/api/compare') {

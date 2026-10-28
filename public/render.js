@@ -231,6 +231,16 @@ export function paidRowHtml(event) {
   return `<article class="call-row pay-row paid" data-capture="${escapeHtml(event.capture_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal capture</span><span class="cached-badge">paid</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.product_title || event.gift)}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, capture ${escapeHtml(event.capture_id)}</p><p class="pay-line">Order ${escapeHtml(event.order_id)}, ${escapeHtml(when)}</p></div></article>`;
 }
 
+/** The panel row of the PayPal tracker added after the capture. */
+export function shippedRowHtml(event) {
+  return `<article class="call-row pay-row shipped" data-tracker="${escapeHtml(event.tracker_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal tracker</span><span class="cached-badge">shipped</span></div><div class="call-body"><p class="pay-line">On its way${event.ship_to ? ` to ${escapeHtml(event.ship_to)}` : ''}</p><p class="pay-line">Tracking ${escapeHtml(event.tracking_number)}, capture ${escapeHtml(event.capture_id)}</p></div></article>`;
+}
+
+/** The panel row of a full refund. */
+export function refundRowHtml(event) {
+  return `<article class="call-row pay-row refunded" data-refund-row="${escapeHtml(event.refund_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">refunded</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.gift)}</p><p class="pay-line">$${escapeHtml(event.amount)} USD back, refund ${escapeHtml(event.refund_id)}</p><p class="pay-line">Capture ${escapeHtml(event.capture_id)}</p></div></article>`;
+}
+
 /** The plain model's gift ideas and how they score in Qloo. */
 export function compareHtml(event) {
   const plain = Array.isArray(event?.plain) ? event.plain : [];

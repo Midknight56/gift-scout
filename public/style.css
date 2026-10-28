@@ -177,11 +177,17 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
 .buy-button:disabled { opacity: .5; cursor: default; }
 .pay-row .call-number { color: var(--green); }
 .pay-line { margin: 0 0 6px; }
-.pay-row.paid { border-color: var(--green); }
+.pay-row.paid, .pay-row.shipped { border-color: var(--green); }
 .card-actions.pay-choice { flex-wrap: wrap; align-items: center; gap: 12px; }
 .pay-note { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; text-align: right; }
 .buy-button.quiet { background: var(--white); color: var(--ink); }
 .buy-button.quiet:hover { color: var(--white); }
+.ship-form { display: grid; flex-basis: 100%; min-width: 0; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--hairline); }
+.ship-form legend { padding: 0 4px; color: var(--muted); font-size: 11px; }
+.ship-form input { min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--hairline); background: var(--white); color: var(--ink); font: inherit; font-size: 13px; }
+.ship-form [name="ship-name"], .ship-form [name="ship-line1"] { grid-column: 1 / -1; }
+.refund-button { align-self: flex-start; }
+.pay-row.refunded { border-color: var(--muted); }
 .compare-actions { display: flex; justify-content: flex-start; min-width: 0; margin-top: -8px; }
 .compare-button { max-width: 100%; min-height: 44px; white-space: normal; text-align: left; }
 .compare-block { min-width: 0; padding: 16px; border: 1px solid var(--hairline); background: var(--white); color: var(--ink); overflow-wrap: anywhere; }

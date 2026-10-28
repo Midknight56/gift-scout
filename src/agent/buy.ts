@@ -3,7 +3,7 @@
 // tool makes a PayPal sandbox order and hands back the approval link; the buyer approves at PayPal, and the return page
 // captures. No money moves without the tap and the buyer's own approval at PayPal.
 import { validate, type JsonSchema } from '../mcp/schema'
-import { SANDBOX_TEST_CARD, type PayPal } from '../paypal/client'
+import { SANDBOX_TEST_CARD, type PayPal, type Shipping } from '../paypal/client'
 import type { Budget, ConversationState } from './agent'
 import type { ScoutEvent } from './events'
 import { neuronsFor, type ChatMessage, type Model } from './model'
@@ -30,8 +30,12 @@ export interface Purchase {
   gift: string
   order_id: string
   amount: string
-  status: 'created' | 'captured'
+  status: 'created' | 'captured' | 'refunded'
   capture_id?: string
+  /** City and state only. The street goes to PayPal and is never saved here. */
+  ship_to?: string
+  tracker_id?: string
+  refund_id?: string
   at?: string
   product_title?: string
   product_url?: string
@@ -44,6 +48,8 @@ export type PayMethod = 'paypal' | 'card'
 export interface BuyOptions {
   cardId: string
   method?: PayMethod
+  /** Where the gift goes. It rides on the PayPal order; only its city and state are kept. */
+  shipping?: Shipping
   state: ConversationState & { purchases?: Purchase[] }
   model: Model
   budget: Budget
@@ -55,6 +61,23 @@ export interface BuyOptions {
 }
 
 const MAX_BUY_MODEL_CALLS = 2
+
+export const shipTo = (shipping: Shipping) => `${shipping.city}, ${shipping.state}`
+
+/** After a capture, a tracker on an order that has an address. A failed tracker leaves the payment as it is: the card
+ *  simply shows no tracker. The tracking number is made from the capture, so a repeat asks PayPal for the same one. */
+export async function trackShipment(paypal: PayPal, purchase: Purchase, now: () => number): Promise<ScoutEvent | null> {
+  if (!purchase.ship_to || !purchase.capture_id || purchase.tracker_id) return null
+  const trackingNumber = 'GS' + purchase.capture_id
+  try {
+    const tracker = await paypal.addTracker(purchase.order_id, purchase.capture_id, trackingNumber)
+    purchase.tracker_id = tracker.id
+    return { t: 'shipped', card: purchase.card, order_id: purchase.order_id, capture_id: purchase.capture_id, tracker_id: tracker.id, tracking_number: trackingNumber, ship_to: purchase.ship_to, at: new Date(now()).toISOString() }
+  } catch {
+    console.log(`paypal tracker failed ${purchase.order_id}`)
+    return null
+  }
+}
 
 const buyLocks = new Map<string, { tail: Promise<void>; participants: number; purchase?: Purchase }>()
 
@@ -93,6 +116,10 @@ async function runBuyTurnLocked(o: BuyOptions, pending?: Purchase): Promise<Conv
   const card = state.cards.find((c) => c.id === o.cardId)
   if (!card) {
     await o.emit({ t: 'error', text: 'That card is not in this conversation any more.' })
+    return state
+  }
+  if (state.purchases?.some((purchase) => purchase.card === card.id && purchase.status === 'refunded')) {
+    await o.emit({ t: 'error', text: 'That gift was refunded.' })
     return state
   }
   const savedOpen = state.purchases?.find((purchase) => purchase.card === card.id && purchase.status === 'created')
@@ -174,6 +201,7 @@ async function runBuyTurnLocked(o: BuyOptions, pending?: Purchase): Promise<Conv
         cancelUrl: `${o.origin}/s/${encodeURIComponent(state.id)}`,
         requestId: `gs-${state.id}-${card.id}-${value}-${method}`,
         ...(method === 'card' ? { card: SANDBOX_TEST_CARD } : {}),
+        ...(o.shipping ? { shipping: o.shipping } : {}),
       })
       if (method === 'card' ? !order.captureId : !order.approveUrl) throw new Error('order not usable')
       const text = method === 'card'
@@ -182,12 +210,14 @@ async function runBuyTurnLocked(o: BuyOptions, pending?: Purchase): Promise<Conv
       await o.emit({ t: 'result', n, tool: BUY_GIFT.name, ok: true, ms: Math.round(now() - started), cached: false, text, top: [] })
       const productFields = card.product ? { product_title: card.product.title, product_url: card.product.url } : {}
       await o.emit({ t: 'order', card: card.id, gift: card.gift, order_id: order.id, amount: value, method, ...productFields, ...(order.approveUrl ? { approve_url: order.approveUrl } : {}) })
-      const purchase: Purchase = { card: card.id, gift: card.gift, order_id: order.id, amount: value, status: 'created', ...(order.approveUrl ? { approve_url: order.approveUrl } : {}) }
+      const purchase: Purchase = { card: card.id, gift: card.gift, order_id: order.id, amount: value, status: 'created', ...(order.approveUrl ? { approve_url: order.approveUrl } : {}), ...(o.shipping ? { ship_to: shipTo(o.shipping) } : {}) }
       if (card.product) Object.assign(purchase, productFields)
       if (order.captureId) {
         const at = new Date(now()).toISOString()
         Object.assign(purchase, { status: 'captured', capture_id: order.captureId, at })
         await o.emit({ t: 'paid', card: card.id, gift: card.gift, order_id: order.id, capture_id: order.captureId, amount: value, at, ...productFields })
+        const shipped = await trackShipment(o.paypal, purchase, now)
+        if (shipped) await o.emit(shipped)
       }
       state.purchases = [...(state.purchases ?? []).filter((p) => p.order_id !== order.id), purchase]
       bought = true
