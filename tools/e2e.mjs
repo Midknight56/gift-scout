@@ -250,7 +250,9 @@ async function main() {
     check('back at Gift Scout, the panel shows the capture', /capture [A-Z0-9]{10,}/.test(paid), paid.replace(/\s+/g, ' ').slice(0, 120))
     await page.locator('.pay-row.shipped').waitFor({ timeout: 30000 })
     const shipped = await page.locator('.pay-row.shipped').innerText()
-    check('the panel shows the PayPal tracker and only the city', /On its way to San Jose, CA/.test(shipped) && /Tracking GS[A-Z0-9]{10,}/.test(shipped) && !/Main St/.test(await page.content()), shipped.replace(/\s+/g, ' ').slice(0, 120))
+    // The street stays in the visitor's own form; the saved conversation (what a share link shows) keeps the city only.
+    const savedText = await page.evaluate(async (id) => (await fetch(`/api/conversation/${id}`)).text(), conversationId)
+    check('the panel shows the PayPal tracker and only the city', /On its way to San Jose, CA/.test(shipped) && /Tracking GS[A-Z0-9]{10,}/.test(shipped) && /San Jose, CA/.test(savedText) && !/Main St|95131|Sam Rivera/.test(savedText), shipped.replace(/\s+/g, ' ').slice(0, 120))
 
     // Bad paths for the refund: a stranger and a missing owner token are refused before PayPal is asked.
     // The conversation and its owner token are the ones this tab keeps in sessionStorage (one conversation in this run).
