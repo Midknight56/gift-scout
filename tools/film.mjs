@@ -80,7 +80,13 @@ try {
   beat('first Qloo call')
   await page.locator('.gift-card').first().waitFor({ timeout: 120000 })
   beat('first card')
-  await page.locator('.gift-card').nth(4).waitFor({ timeout: 60000 })
+  // A run can keep fewer than six cards (the rest dropped by code), so wait until the count holds for 5 s.
+  for (let seen = -1, still = 0, t = 0; still < 5000 && t < 60000; t += 500) {
+    const n = await page.locator('.gift-card').count()
+    still = n === seen ? still + 500 : 0
+    seen = n
+    await pause(500)
+  }
   await pause(2500)
   beat('cards in')
   if (UNTIL === 'cards') {
