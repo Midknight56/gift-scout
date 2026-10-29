@@ -19,7 +19,7 @@ import { Channel3Client } from './channel3/client'
 import { channel3Enabled } from './channel3/flag'
 import { qlooTools, type QlooContext } from './qloo/tools'
 import { Conversations, D1Cache, NeuronLedger, RunCache } from './store/d1'
-import { REPLAY_PACE_MS, DAILY_BUYS_PER_VISITOR, DAILY_COMPARES_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DAILY_CHANNEL3_CALLS, DAILY_CHANNEL3_CALLS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DEFAULT_ACCOUNT_NEURONS, dailyNeuronShare, MAX_CALL_NEURONS, QLOO_MONTH_FLOOR } from './limits'
+import { REPLAY_PACE_MS, DAILY_BUYS_PER_VISITOR, DAILY_COMPARES_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DAILY_CHANNEL3_CALLS, DAILY_CHANNEL3_CALLS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DEFAULT_ACCOUNT_NEURONS, dailyNeuronShare, MAX_CALL_NEURONS, QLOO_MONTH_FLOOR, clock, perVisitor } from './limits'
 
 export interface Env {
   /** Unset means no live Qloo: only cached and recorded answers. */
@@ -93,7 +93,7 @@ function newId(): string {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-function today(): string { return new Date().toISOString().slice(0, 10) }
+function today(): string { return new Date(clock.now()).toISOString().slice(0, 10) }
 
 function counter(env: Env, name: string) { return env.COUNTERS.get(env.COUNTERS.idFromName(name)) }
 
@@ -113,7 +113,7 @@ async function qlooFor(request: Request, env: Env, ctx?: ExecutionContext): Prom
   const allow = async () => {
     const remaining = observedRemaining ?? await qlooQuota(env)
     if (remaining !== null && remaining < QLOO_MONTH_FLOOR) return false
-    return (await counter(env, 'visitor:' + visitor).take(today(), DAILY_QLOO_CALLS_PER_VISITOR)) &&
+    return (await counter(env, 'visitor:' + visitor).take(today(), perVisitor(DAILY_QLOO_CALLS_PER_VISITOR))) &&
       (await counter(env, 'qloo-total').take(today(), DAILY_QLOO_CALLS))
   }
   const cache = new LayeredCache(new D1Cache(env.DB), env.RECORDING === '1' ? { get: async () => null, put: async () => {} } : new D1Samples(env.DB))
@@ -134,7 +134,7 @@ function channel3For(request: Request, env: Env): Channel3Client | null {
   const visitorPromise = visitorOf(request, env.SESSION_SECRET)
   const allow = async () => {
     const visitor = await visitorPromise
-    return (await counter(env, 'channel3:' + visitor).take(today(), DAILY_CHANNEL3_CALLS_PER_VISITOR)) &&
+    return (await counter(env, 'channel3:' + visitor).take(today(), perVisitor(DAILY_CHANNEL3_CALLS_PER_VISITOR))) &&
       (await counter(env, 'channel3:all').take(today(), DAILY_CHANNEL3_CALLS))
   }
   return new Channel3Client(env.CHANNEL3_API_KEY!, (input, init) => fetch(input, init), new D1Cache(env.DB), allow)
@@ -190,7 +190,7 @@ export default {
         live: !monthlyLimitReached && env.QLOO_API_KEY && env.AI
           ? {
               model: new WorkersAiModel(env.AI), ctx: await qlooFor(request, env, ctx), budget,
-              takeVisitorTurn: () => counter(env, 'turns:' + visitor).take(today(), Number(env.TURNS_PER_VISITOR ?? DAILY_TURNS_PER_VISITOR)),
+              takeVisitorTurn: () => counter(env, 'turns:' + visitor).take(today(), Number(env.TURNS_PER_VISITOR ?? perVisitor(DAILY_TURNS_PER_VISITOR))),
             }
           : null,
         products: channel3For(request, env) ?? undefined,
@@ -217,7 +217,7 @@ export default {
         conversations: new Conversations(env.DB),
         paypal: paypalFor(env),
         live: env.AI
-          ? { model: new WorkersAiModel(env.AI), budget: ledgerFor(env), takeVisitorBuy: () => counter(env, 'buys:' + visitor).take(today(), DAILY_BUYS_PER_VISITOR) }
+          ? { model: new WorkersAiModel(env.AI), budget: ledgerFor(env), takeVisitorBuy: () => counter(env, 'buys:' + visitor).take(today(), perVisitor(DAILY_BUYS_PER_VISITOR)) }
           : null,
         origin: url.origin,
         ownerSecret: env.SESSION_SECRET,
@@ -242,7 +242,7 @@ export default {
         live: env.AI && env.QLOO_API_KEY
           ? {
               model: new WorkersAiModel(env.AI), qloo: (await qlooFor(request, env, ctx)).qloo, budget: ledgerFor(env),
-              takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), DAILY_COMPARES_PER_VISITOR),
+              takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), perVisitor(DAILY_COMPARES_PER_VISITOR)),
             }
           : null,
       }, stream.send)

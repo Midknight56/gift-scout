@@ -15,6 +15,18 @@ export const DAILY_CHANNEL3_CALLS_PER_VISITOR = 30
 /** Live agent turns per visitor a day. Each costs neurons; a repeated example costs none (the run cache). */
 export const DAILY_TURNS_PER_VISITOR = 12
 
+export const clock = { now: (): number => Date.now() }
+export const VISITOR_WINDOW_FROM = Date.parse('2026-11-02T00:00:00Z')
+export const VISITOR_WINDOW_UNTIL = Date.parse('2026-11-06T12:00:00Z')
+export const JUDGING_VISITOR_FACTOR = 4
+// Inside the window a visitor may take 48 turns, 12 compares, 24 buys, 600 Qloo calls and 120 Channel3 calls a day,
+// but every whole app total stays (2,000 Qloo calls, the 3,000 month floor, 300 Channel3 calls, the neuron share of
+// 3,500 under the account cap of 9,500, under the free 10,000), so the spend ceiling is the same and judging still
+// costs $0. Buys are PayPal sandbox orders (play money) and each model call is counted in the neuron share.
+export function perVisitor(normal: number, now: number = clock.now()): number {
+  return VISITOR_WINDOW_FROM <= now && now < VISITOR_WINDOW_UNTIL ? normal * JUDGING_VISITOR_FACTOR : normal
+}
+
 // Workers AI on the Workers Free plan: 10,000 neurons a day for the whole account, shared by the hackathon apps through
 // the ledger. A full first turn was budgeted at about 120 neurons (6 model calls x about 2,500 input tokens x 4,625 per
 // million = 69, plus about 1,500 output tokens x 30,475 per million = 46), so 2,000 a day is about 16 live first turns,
@@ -29,7 +41,7 @@ export const DEFAULT_ACCOUNT_NEURONS = 9500
 export const JUDGING_DAILY_NEURONS = 3500
 export const JUDGING_FROM = Date.parse('2026-11-02T05:00:00Z')
 export const JUDGING_UNTIL = Date.parse('2026-11-06T04:45:00Z')
-export function dailyNeuronShare(now: number = Date.now()): number {
+export function dailyNeuronShare(now: number = clock.now()): number {
   return JUDGING_FROM <= now && now < JUDGING_UNTIL ? JUDGING_DAILY_NEURONS : DEFAULT_DAILY_NEURONS
 }
 // The room held in the ledger before each Workers AI call; the row then takes the call's real cost, even when that is

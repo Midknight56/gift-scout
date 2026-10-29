@@ -52,7 +52,8 @@ on the left to the Qloo results the cards rest on at the right. Line weight foll
 
 "Compare with Qloo off" uses the same message with the same Workers AI model and no tools. Each suggestion is looked
 up in Qloo and scored against the same favourites with `filter.results.entities`, or marked "not found in Qloo". The
-page shows both means side by side. There is one comparison per conversation and three per day per visitor. Only the
+page shows both means side by side. There is one comparison per conversation and three per day per visitor (12 from 2
+to 5 Nov, for judging). Only the
 tab that started the conversation can compare it.
 
 ## How it uses Qloo
