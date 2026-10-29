@@ -489,7 +489,9 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
         }
         if (!carried.text) {
           // Nothing to stand on: say so, and spend no more model calls.
-          await o.emit({ t: 'say', text: `Qloo does not know ${carried.unknown.join(' or ')}. Try a favourite artist, author, band, show or brand.` })
+          await o.emit({ t: 'say', text: carried.unknown.length
+            ? `Qloo does not know ${carried.unknown.join(' or ')}. Try a favourite artist, author, band, show or brand.`
+            : 'Tell me a couple of things they love, like a favourite author, band, show or brand.' })
           stopped = true
           break
         }

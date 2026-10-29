@@ -29,13 +29,17 @@ export function otherTypeTag(tag: string, target: EntityType): boolean {
 const PEOPLE = ['author', 'person', 'artist']
 
 function fold(s: string): string {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const letters: Record<string, string> = { 'ø': 'o', 'æ': 'ae', 'œ': 'oe', 'ß': 'ss', 'ł': 'l', 'đ': 'd', 'ð': 'd', 'þ': 'th' }
+  return s.replace(/[øæœßłđðþ]/giu, (letter) => letters[letter.toLowerCase()])
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
 /** True when a found name is the name asked for: equal, or one holds the other and is at least half its length. */
 export function nameMatches(name: string, query: string): boolean {
-  const n = fold(name)
-  const q = fold(query)
+  const numbers: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10' }
+  const numbered = (s: string) => fold(s).replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (word) => numbers[word])
+  const n = numbered(name)
+  const q = numbered(query)
   if (!n || !q) return false
   return n === q || (n.includes(q) && q.length * 2 >= n.length) || (q.includes(n) && n.length * 2 >= q.length)
 }

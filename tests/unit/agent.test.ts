@@ -645,13 +645,13 @@ describe('who the gift is for', () => {
 
   it('asks Qloo with no audience signal when the plan gives none', async () => {
     const model = scripted([reply([call('plan_scout', PLAN)]), reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap')] })])])
-    const { asked } = await turn(model, 'Taylor Swift and baking.')
+    const { asked } = await turn(model, 'Phoebe Bridgers and Korean food.')
     expect(asked.some((u) => u.searchParams.has('signal.demographics.gender'))).toBe(false)
   })
 
   it('uses the first message pronouns for every insights request', async () => {
     const model = scripted([reply([call('plan_scout', PLAN)]), reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap')] })])])
-    const { asked, events } = await turn(model, 'My brother. He loves Taylor Swift.')
+    const { asked, events } = await turn(model, 'My brother. He loves Phoebe Bridgers and Korean food.')
     const insights = asked.filter((url) => url.pathname === '/v2/insights')
     expect(insights.length).toBeGreaterThan(0)
     expect(insights.every((url) => url.searchParams.get('signal.demographics.gender') === 'male')).toBe(true)
@@ -660,7 +660,7 @@ describe('who the gift is for', () => {
 
   it('omits the gender signal when the first message does not make it plain', async () => {
     const model = scripted([reply([call('plan_scout', { ...PLAN, gender: 'male' })]), reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap')] })])])
-    const { asked } = await turn(model, 'Taylor Swift and baking.')
+    const { asked } = await turn(model, 'Phoebe Bridgers and Korean food.')
     const insights = asked.filter((url) => url.pathname === '/v2/insights')
     expect(insights.length).toBeGreaterThan(0)
     expect(insights.every((url) => !url.searchParams.has('signal.demographics.gender'))).toBe(true)
@@ -710,7 +710,7 @@ describe('Channel3 products', () => {
       searches.push({ query, opts })
       return { ok: true as const, products: [product('Fender woven strap', 35)] }
     } }
-    const next = await runTurn({ message: 'My brother. He loves Taylor Swift and Korean food. He lives in Toronto. Under 60 dollars.', state: newState('conv1'), model, tools: qlooTools(), ctx, budget: budget(), products, now: () => 10, emit: (e) => { events.push(e) } })
+    const next = await runTurn({ message: 'My brother. He loves Phoebe Bridgers and Korean food. He lives in Toronto. Under 60 dollars.', state: newState('conv1'), model, tools: qlooTools(), ctx, budget: budget(), products, now: () => 10, emit: (e) => { events.push(e) } })
     expect(searches.map((search) => (search as { query: string }).query)).toEqual(["men's Fender strap", 'Homesick'])
     expect(next.cards[0].product).toMatchObject({ title: 'Fender woven strap', price: 35, source: 'channel3' })
     expect(next.cards[1].product).toBeUndefined()

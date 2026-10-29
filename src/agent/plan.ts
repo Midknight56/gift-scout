@@ -6,7 +6,7 @@ import type { JsonSchema } from '../mcp/schema'
 import { AGES, GENDERS } from '../qloo/client'
 import { nameMatches } from '../qloo/tools'
 import type { Found } from './events'
-import { saidIn } from './text'
+import { saidIn, wordSaidIn } from './text'
 
 export const LOVE_KINDS = ['named', 'drink', 'cuisine', 'hobby'] as const
 export type LoveKind = (typeof LOVE_KINDS)[number]
@@ -77,9 +77,23 @@ export interface Carried { text: string; unknown: string[]; known: string[]; out
 
 /** Runs the plan's Qloo calls through `run` (each one shows in the panel). */
 export async function carryOut(plan: Plan, said: string[], run: RunTool): Promise<Carried> {
-  const loves = plan.loves.slice(0, 5)
-  const found = await Promise.all(loves.map((love) => {
-    if (love.kind === 'named') return run('search_entities', { query: love.name })
+  const loves = plan.loves.slice(0, 5).filter((love) => saidIn(love.name, said) || wordSaidIn(love.name, said))
+  const queries = loves.map((love) => love.name)
+  const found = await Promise.all(loves.map(async (love, i) => {
+    if (love.kind === 'named') {
+      const first = await run('search_entities', { query: love.name })
+      if (first.ok && !nameMatches(first.top[0]?.name ?? '', love.name)) {
+        const shorter = love.name.trim().replace(/\s+(?:novels?|books?|mysteries|mystery|records?|albums?|music|films?|movies?|shows?|series|podcasts?|games?)$/i, '')
+        if (shorter !== love.name.trim()) {
+          const retry = await run('search_entities', { query: shorter })
+          if (retry.ok && nameMatches(retry.top[0]?.name ?? '', shorter)) {
+            queries[i] = shorter
+            return retry
+          }
+        }
+      }
+      return first
+    }
     if (love.kind === 'drink') return run('search_entities', { query: love.name, type: 'brand' })
     if (love.kind === 'cuisine') return run('search_tags', { query: cuisineWord(love.name) })
     return run('search_tags', { query: love.name })
@@ -95,7 +109,7 @@ export async function carryOut(plan: Plan, said: string[], run: RunTool): Promis
     const top = found[i].ok ? found[i].top : []
     // Qloo answers a search with its nearest match for almost any name; a named love whose best match is not that
     // name is a love Qloo does not know, and is not used as a seed.
-    if (!top.length || (love.kind === 'named' && !nameMatches(top[0].name, love.name))) { unknown.push(love.name); return }
+    if (!top.length || (love.kind === 'named' && !nameMatches(top[0].name, queries[i]))) { unknown.push(love.name); return }
     known.push(top[0].type === 'tag' ? love.name : top[0].name)
     if (top[0].type === 'tag') {
       const tag = love.kind === 'cuisine' ? restaurantTag(top) : top[0].id

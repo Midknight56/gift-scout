@@ -7,11 +7,24 @@ export function plain(text: string): string {
     .replace(/\s*[\u2014\u2013]\s*/g, ', ').replace(/(\p{L})-(?=\p{L})/gu, '$1 ').replace(/\s{2,}/g, ' ').trim()
 }
 
+function fold(s: string): string {
+  return ' ' + s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' '
+}
+
 /** True when the words of `text` appear in what the person said (case and accents aside). */
 export function saidIn(text: string, said: string[]): boolean {
-  const fold = (s: string) => ' ' + s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' '
   const want = fold(text)
   return want.trim() !== '' && said.some((s) => fold(s).includes(want))
+}
+
+// True when a significant word of a love matches something the person said after a small stem.
+export function wordSaidIn(text: string, said: string[]): boolean {
+  const ignored = new Set(['the', 'and', 'for', 'with', 'from', 'food', 'music', 'book', 'books', 'gift', 'gifts', 'love', 'loves'])
+  const stem = (word: string) => word.replace(/(?:ings|ing|ers|er|ed|es|s)$/, '').replace(/([a-z])\1$/, '$1')
+  const words = (s: string) => fold(s).trim().split(/\s+/)
+    .filter((word) => !ignored.has(word)).map(stem).filter((word) => word.replace(/[0-9]/g, '').length >= 3 && !ignored.has(word))
+  const spoken = new Set(said.flatMap(words))
+  return words(text).some((word) => spoken.has(word))
 }
 
 /** The most they want to spend, when the message says so ("under 60 dollars", "below $30", "up to 100"). The model
