@@ -181,7 +181,7 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
 .card-actions.pay-choice { flex-wrap: wrap; align-items: center; gap: 12px; }
 .pay-note { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; text-align: right; }
 .buy-button.quiet { background: var(--white); color: var(--ink); }
-.buy-button.quiet:hover { color: var(--white); }
+.buy-button.quiet:hover { background: var(--accent); border-color: var(--accent); color: var(--white); }
 .compare-actions { display: flex; justify-content: flex-start; min-width: 0; margin-top: -8px; }
 .compare-button { max-width: 100%; min-height: 44px; white-space: normal; text-align: left; }
 .compare-block { min-width: 0; padding: 16px; border: 1px solid var(--hairline); background: var(--white); color: var(--ink); overflow-wrap: anywhere; }
@@ -225,4 +225,7 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
 @media (max-width: 760px) {
   .how-dialog { position: fixed; inset: auto 16px 12px; width: auto; max-width: none; max-height: calc(100dvh - 32px); margin: 0; padding: 20px; border-radius: 12px 12px 4px 4px; }
   .how-heading h2 { font-size: 29px; }
+}
+@media (max-width: 760px) {
+  .scene-panel:not(.open) { transform: translateY(100%); }
 }
