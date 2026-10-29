@@ -3,7 +3,7 @@ import { newState, runTurn, type Budget } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import { WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
 import { carryOut, type Plan } from '../../src/agent/plan'
-import { wordSaidIn } from '../../src/agent/text'
+import { nameSaidIn, wordSaidIn } from '../../src/agent/text'
 import { QlooClient, type Cache } from '../../src/qloo/client'
 import { nameMatches, qlooTools } from '../../src/qloo/tools'
 
@@ -39,8 +39,8 @@ function qloo(answer?: (url: URL) => unknown) {
   }) as typeof fetch
   return { ctx: { qloo: new QlooClient('k', fetcher, cache, async () => true) }, asked }
 }
-async function turn(message: string, loves: Plan['loves'], answer?: (url: URL) => unknown) {
-  const model = scripted([reply([call('plan_scout', { loves })]), reply([]), reply([])])
+async function turn(message: string, loves: Plan['loves'], answer?: (url: URL) => unknown, city?: string) {
+  const model = scripted([reply([call('plan_scout', { loves, ...(city ? { city } : {}) })]), reply([]), reply([])])
   const { ctx, asked } = qloo(answer)
   const events: ScoutEvent[] = []
   const state = await runTurn({ message, state: newState('judge'), model, ctx, tools: qlooTools(), budget: budget(), emit: (e) => { events.push(e) } })
@@ -182,5 +182,40 @@ describe('Workers AI model call timeout', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('album seed and named city regressions', () => {
+  it('treats an album result for a named love as unknown and never uses it as a seed', async () => {
+    const albumId = '00000000-0000-4000-8000-000000000024'
+    const calls: { tool: string; args: Record<string, unknown> }[] = []
+    const result = await carryOut({ loves: [{ name: 'Eivor', kind: 'named' }] }, ['My cousin loves the singer Eivor and walks in the forest.'], async (tool, args) => {
+      calls.push({ tool, args })
+      if (tool === 'search_entities') return { ok: true, text: '', top: [{ id: albumId, name: 'Eivor', type: 'album' }] }
+      return { ok: true, text: '', top: [] }
+    })
+    expect(calls.filter((call) => call.tool === 'taste_insights').every((call) => !JSON.stringify(call.args).includes(albumId))).toBe(true)
+    expect(result.unknown).toEqual(['Eivor'])
+    const live = await turn('My cousin loves the singer Eivor and walks in the forest.', [{ name: 'Eivor', kind: 'named' }], (url) => url.pathname === '/search'
+      ? { results: [entity('EivÃ¸r', 'album', albumId)] }
+      : { results: { entities: [] } })
+    expect(live.events.find((event) => event.t === 'say')?.text).toContain('Qloo does not know Eivor')
+  })
+
+  it.each([
+    ['She lives in Toronto.', 'Toronto', true],
+    ['He lives in New York.', 'New York', true],
+    ['walks in the forest', 'forest', false],
+    ['she lives in toronto', 'toronto', false],
+  ])('uses city %s only when it is written as a name', async (message, city, shouldAskPlace) => {
+    const { asked } = await turn(message + ' Phoebe Bridgers is her favorite.', [{ name: 'Phoebe Bridgers', kind: 'named' }], undefined, city)
+    expect(asked.some((url) => url.pathname === '/v2/insights' && url.searchParams.get('filter.type') === 'urn:entity:place')).toBe(shouldAskPlace)
+  })
+
+  it('matches capitalized city names by whole words, ignoring case and accents for matching', () => {
+    expect(nameSaidIn('Toronto', ['She lives in Toronto.'])).toBe(true)
+    expect(nameSaidIn('New York', ['He lives in New York.'])).toBe(true)
+    expect(nameSaidIn('forest', ['walks in the forest'])).toBe(false)
+    expect(nameSaidIn('toronto', ['she lives in toronto'])).toBe(false)
   })
 })

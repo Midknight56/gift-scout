@@ -17,6 +17,19 @@ export function saidIn(text: string, said: string[]): boolean {
   return want.trim() !== '' && said.some((s) => fold(s).includes(want))
 }
 
+// True when the city's whole words were said with a capitalized first word.
+export function nameSaidIn(text: string, said: string[]): boolean {
+  const wanted = fold(text).trim().split(/\s+/).filter(Boolean)
+  if (!wanted.length) return false
+  return said.some((sentence) => {
+    const matches = [...sentence.matchAll(/[\p{L}\p{N}]+/gu)]
+    return matches.some((match, index) => {
+      if (!/\p{Lu}/u.test(match[0][0]) || index + wanted.length > matches.length) return false
+      return wanted.every((word, offset) => fold(matches[index + offset][0]).trim() === word)
+    })
+  })
+}
+
 // True when a significant word of a love matches something the person said after a small stem.
 export function wordSaidIn(text: string, said: string[]): boolean {
   const ignored = new Set(['the', 'and', 'for', 'with', 'from', 'food', 'music', 'book', 'books', 'gift', 'gifts', 'love', 'loves'])
