@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { newState, runTurn, type Budget } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
-import type { ChatMessage, Model, ModelReply, ToolCall } from '../../src/agent/model'
+import { WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
 import { carryOut, type Plan } from '../../src/agent/plan'
 import { wordSaidIn } from '../../src/agent/text'
 import { QlooClient, type Cache } from '../../src/qloo/client'
@@ -144,6 +144,43 @@ describe('live judge name regressions', () => {
     for (const [letter, folded] of [['ø', 'o'], ['æ', 'ae'], ['œ', 'oe'], ['ß', 'ss'], ['ł', 'l'], ['đ', 'd'], ['ð', 'd'], ['þ', 'th']]) {
       expect(nameMatches(letter, folded)).toBe(true)
       expect(nameMatches(letter.toUpperCase(), folded)).toBe(true)
+    }
+  })
+})
+
+describe('Workers AI model call timeout', () => {
+  it('rejects a model call that does not resolve within its configured limit', async () => {
+    const model = new WorkersAiModel({ run: () => new Promise(() => {}) }, 20)
+    const result = await Promise.race([
+      model.chat([], [], 100).then(() => 'answered', (error: Error) => error.message),
+      new Promise<string>((resolve) => setTimeout(() => resolve('still pending'), 1000)),
+    ])
+    expect(result).toBe('The model took too long.')
+  })
+
+  it('ends the turn with the model error and makes no Qloo call', async () => {
+    const model = new WorkersAiModel({ run: () => new Promise(() => {}) }, 20)
+    const { ctx, asked } = qloo()
+    const events: ScoutEvent[] = []
+    await runTurn({ message: 'My dad. Le Carre novels and single malt. Christmas.', state: newState('judge'), model, ctx, tools: qlooTools(), budget: budget(), emit: (e) => { events.push(e) } })
+    expect(events.filter((e) => e.t === 'error')).toEqual([{ t: 'error', text: 'The model did not answer. Try again in a minute.' }])
+    expect(asked).toEqual([])
+  })
+
+  it('returns a normal answer and clears the timeout after a fast response', async () => {
+    vi.useFakeTimers()
+    try {
+      const raw = { choices: [{ message: { content: 'Hello' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }
+      const model = new WorkersAiModel({ run: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return raw
+      } }, 1000)
+      const pending = model.chat([], [], 100)
+      await vi.advanceTimersByTimeAsync(5)
+      await expect(pending).resolves.toMatchObject({ content: 'Hello', tool_calls: [] })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

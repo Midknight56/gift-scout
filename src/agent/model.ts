@@ -140,13 +140,24 @@ export interface AiBinding { run(model: string, input: unknown): Promise<unknown
 
 export class WorkersAiModel implements Model {
   readonly name = MODEL
-  constructor(private ai: AiBinding) {}
+  constructor(private ai: AiBinding, private timeoutMs = 45_000) {}
 
   async chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number): Promise<ModelReply> {
     // Thinking is off. Measured 23 Oct 2026 on the same first message: with it on, 4 model calls took 129 neurons and
     // 22 s; with it off, one call took 10.5 neurons and about 2 s.
     const input = { messages, ...(tools.length ? { tools } : {}), max_tokens: maxTokens, temperature: 0.3, chat_template_kwargs: { enable_thinking: false } }
-    const raw = (await this.ai.run(MODEL, input)) as RawReply
-    return readReply(raw, tools.map((tool) => tool.function.name), maxTokens)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let raw: unknown
+    try {
+      raw = await Promise.race([
+        this.ai.run(MODEL, input),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('The model took too long.')), this.timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    return readReply(raw as RawReply, tools.map((tool) => tool.function.name), maxTokens)
   }
 }
