@@ -6,7 +6,7 @@ import type { JsonSchema } from '../mcp/schema'
 import { AGES, GENDERS } from '../qloo/client'
 import { nameMatches } from '../qloo/tools'
 import type { Found } from './events'
-import { nameSaidIn, saidIn, wordSaidIn } from './text'
+import { nameSaidIn, saidIn, tagMatches, wordSaidIn } from './text'
 
 export const LOVE_KINDS = ['named', 'drink', 'cuisine', 'hobby'] as const
 export type LoveKind = (typeof LOVE_KINDS)[number]
@@ -109,7 +109,8 @@ export async function carryOut(plan: Plan, said: string[], run: RunTool): Promis
     const top = found[i].ok ? found[i].top : []
     // Qloo answers a search with its nearest match for almost any name; a named love whose best match is not that
     // name is a love Qloo does not know, and is not used as a seed.
-    if (!top.length || (love.kind === 'named' && (top[0].type === 'album' || !nameMatches(top[0].name, queries[i])))) { unknown.push(love.name); return }
+    if (!top.length || (love.kind === 'named' && (top[0].type === 'album' || !nameMatches(top[0].name, queries[i]))) ||
+      (love.kind === 'hobby' && top[0].type === 'tag' && !tagMatches(top[0].name, love.name))) { unknown.push(love.name); return }
     known.push(top[0].type === 'tag' ? love.name : top[0].name)
     if (top[0].type === 'tag') {
       const tag = love.kind === 'cuisine' ? restaurantTag(top) : top[0].id

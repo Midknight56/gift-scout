@@ -31,13 +31,23 @@ export function nameSaidIn(text: string, said: string[]): boolean {
 }
 
 // True when a significant word of a love matches something the person said after a small stem.
+const ignoredWords = new Set(['the', 'and', 'for', 'with', 'from', 'food', 'music', 'book', 'books', 'gift', 'gifts', 'love', 'loves'])
+const stem = (word: string) => word.replace(/(?:ings|ing|ers|er|ed|es|s)$/, '').replace(/([a-z])\1$/, '$1')
+const significantWords = (s: string) => fold(s).trim().split(/\s+/)
+  .filter((word) => !ignoredWords.has(word)).map(stem)
+  .filter((word) => word.replace(/[0-9]/g, '').length >= 3 && !ignoredWords.has(word))
+
 export function wordSaidIn(text: string, said: string[]): boolean {
-  const ignored = new Set(['the', 'and', 'for', 'with', 'from', 'food', 'music', 'book', 'books', 'gift', 'gifts', 'love', 'loves'])
-  const stem = (word: string) => word.replace(/(?:ings|ing|ers|er|ed|es|s)$/, '').replace(/([a-z])\1$/, '$1')
-  const words = (s: string) => fold(s).trim().split(/\s+/)
-    .filter((word) => !ignored.has(word)).map(stem).filter((word) => word.replace(/[0-9]/g, '').length >= 3 && !ignored.has(word))
-  const spoken = new Set(said.flatMap(words))
-  return words(text).some((word) => spoken.has(word))
+  const spoken = new Set(said.flatMap(significantWords))
+  return significantWords(text).some((word) => spoken.has(word))
+}
+
+// True when every significant stemmed query word is among the stemmed words of the tag name.
+export function tagMatches(tagName: string, query: string): boolean {
+  const wanted = significantWords(query)
+  if (!wanted.length) return true
+  const available = new Set(significantWords(tagName))
+  return wanted.every((word) => available.has(word))
 }
 
 /** The most they want to spend, when the message says so ("under 60 dollars", "below $30", "up to 100"). The model

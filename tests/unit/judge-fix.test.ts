@@ -3,7 +3,7 @@ import { newState, runTurn, type Budget } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import { WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
 import { carryOut, type Plan } from '../../src/agent/plan'
-import { nameSaidIn, wordSaidIn } from '../../src/agent/text'
+import { nameSaidIn, tagMatches, wordSaidIn } from '../../src/agent/text'
 import { QlooClient, type Cache } from '../../src/qloo/client'
 import { nameMatches, qlooTools } from '../../src/qloo/tools'
 
@@ -217,5 +217,48 @@ describe('album seed and named city regressions', () => {
     expect(nameSaidIn('New York', ['He lives in New York.'])).toBe(true)
     expect(nameSaidIn('forest', ['walks in the forest'])).toBe(false)
     expect(nameSaidIn('toronto', ['she lives in toronto'])).toBe(false)
+  })
+})
+
+describe('hobby tag matching', () => {
+  it('accepts hobby tags that contain every significant stemmed query word', () => {
+    expect(tagMatches('Extra long beds', 'long walks')).toBe(false)
+    expect(tagMatches('Runswick Bay', 'runs')).toBe(false)
+    for (const [query, tag] of [
+      ['walking', 'Walking'], ['hiking', 'Hiking'], ['gardening', 'Gardening'], ['running', 'Running'],
+      ['yoga', 'Yoga'], ['cooking', 'Cooking'], ['board games', 'Board Games'], ['knitting', 'Knitting'],
+      ['camping', 'Camping'], ['fishing', 'Fishing'], ['photography', 'Photography'], ['craft beer', 'Craft beer'],
+      ['baking', 'Baking'], ['woodworking', 'Woodworking supply store'], ['rock climbing', 'Rock climbing'],
+    ]) {
+      expect(tagMatches(tag, query), `${query} -> ${tag}`).toBe(true)
+    }
+  })
+
+  it('marks a mismatched hobby tag unknown, while continuing with another known love seed', async () => {
+    const artistId = '00000000-0000-4000-8000-000000000023'
+    const calls: { tool: string; args: Record<string, unknown> }[] = []
+    const result = await carryOut({ loves: [
+      { name: 'long walks', kind: 'hobby' }, { name: 'Bruce Springsteen', kind: 'named' },
+    ] }, ['My uncle loves Bruce Springsteen and long walks in the forest. Christmas.'], async (tool, args) => {
+      calls.push({ tool, args })
+      if (tool === 'search_tags') return { ok: true, text: '', top: [{ id: 'urn:tag:amenity:place:extra_long_beds', name: 'Extra long beds', type: 'tag' }] }
+      if (tool === 'search_entities') return { ok: true, text: '', top: [{ id: artistId, name: 'Bruce Springsteen', type: 'artist' }] }
+      return { ok: true, text: '', top: [] }
+    })
+    const insights = calls.filter((call) => call.tool === 'taste_insights')
+    expect(insights.every((call) => !JSON.stringify(call.args).includes('extra_long_beds'))).toBe(true)
+    expect(insights[0].args.seed_ids).toEqual([artistId])
+    expect(result.unknown).toEqual(['long walks'])
+    expect(result.known).toEqual(['Bruce Springsteen'])
+  })
+
+  it('continues to seed a hobby when its Qloo tag matches', async () => {
+    const calls: { tool: string; args: Record<string, unknown> }[] = []
+    await carryOut({ loves: [{ name: 'hiking', kind: 'hobby' }] }, ['She loves hiking.'], async (tool, args) => {
+      calls.push({ tool, args })
+      if (tool === 'search_tags') return { ok: true, text: '', top: [{ id: 'urn:tag:interests:hiking', name: 'Hiking', type: 'tag' }] }
+      return { ok: true, text: '', top: [] }
+    })
+    expect(calls.filter((call) => call.tool === 'taste_insights').every((call) => (call.args.seed_tags as string[]).includes('urn:tag:interests:hiking'))).toBe(true)
   })
 })
