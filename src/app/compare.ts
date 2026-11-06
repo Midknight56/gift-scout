@@ -1,5 +1,5 @@
 import type { Budget } from '../agent/agent'
-import { firstTurnSeedIds, runCompare } from '../agent/compare'
+import { runCompare } from '../agent/compare'
 import type { ScoutEvent } from '../agent/events'
 import type { Model } from '../agent/model'
 import type { QlooClient } from '../qloo/client'
@@ -48,7 +48,7 @@ export async function compareTurn(conversationId: string, deps: CompareDeps, sen
       return
     }
     const state = saved.state
-    const firstCards = saved.turns[0]?.find((event) => event.t === 'cards')
+    const firstCards = saved.turns[0]?.slice().reverse().find((event) => event.t === 'cards' && event.cards.length > 0)
     if (!firstCards || firstCards.t !== 'cards' || !firstCards.cards.length) {
       await send({ t: 'error', text: 'This conversation needs gift ideas before it can be compared.' })
       await send({ t: 'done', share: '/s/' + conversationId })
@@ -59,18 +59,21 @@ export async function compareTurn(conversationId: string, deps: CompareDeps, sen
     const run: ScoutEvent = { t: 'run', conversation: conversationId, turn: state.turn, mode: deps.live ? 'live' : 'off', purpose: 'compare', said: state.said[0] }
     await sendSaved(run)
     if (!deps.live) {
-      await sendSaved({ t: 'error', text: 'Comparing needs live scouting, which is off right now.' })
+      await sendSaved({ t: 'error', text: 'Comparing needs the live taste graph, which is not available right now.' })
     } else if (!(await deps.live.takeVisitorCompare())) {
       await sendSaved({ t: 'error', text: 'You have compared a lot today.' })
     } else {
       await runCompare({
-        message: state.said[0] ?? '', seedIds: firstTurnSeedIds(saved.turns), cards: firstCards.cards,
+        message: state.said[0] ?? '', turns: saved.turns, cards: firstCards.cards,
         qloo: deps.live.qloo, model: deps.live.model, budget: deps.live.budget, callStart: state.calls,
         emit: sendSaved,
       })
       state.calls += events.filter((event) => event.t === 'call').length
     }
-    await deps.conversations.put(conversationId, state, [...saved.turns, events])
+    await deps.conversations.update(conversationId, (fresh) => ({
+      state: { ...fresh.state, calls: Math.max(fresh.state.calls, state.calls) },
+      turns: [...fresh.turns, events],
+    }))
     await send({ t: 'done', share: '/s/' + conversationId })
   })
 }

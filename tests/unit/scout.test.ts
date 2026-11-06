@@ -3,7 +3,9 @@ import { newState, type Budget } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import type { Model, ModelReply, ToolCall } from '../../src/agent/model'
 import { EXAMPLES, parseScout, scoutTurn, type RecordedRun, type ScoutDeps } from '../../src/app/scout'
-import { ownerToken } from '../../src/app/buy'
+import { buyTurn, ownerToken, tokenMatchesOwner } from '../../src/app/buy'
+import type { Purchase } from '../../src/agent/buy'
+import type { PayPal } from '../../src/paypal/client'
 import { QlooClient, type Cache } from '../../src/qloo/client'
 import { qlooTools } from '../../src/qloo/tools'
 import { Conversations, RunCache } from '../../src/store/d1'
@@ -75,6 +77,7 @@ function deps(over: Partial<ScoutDeps> & { m?: Model; budget?: Budget; visitorOk
     live: { model: over.m ?? model(), ctx, budget: over.budget ?? open, takeVisitorTurn: async () => over.visitorOk ?? true },
     newId: () => 'conv' + String(++id).padStart(4, '0'),
     ownerToken: (id) => ownerToken(id, 'test-secret'),
+    isOwner: (id, token) => tokenMatchesOwner(id, token, 'test-secret'),
     ...over,
   }
   return { d, asked }
@@ -82,7 +85,7 @@ function deps(over: Partial<ScoutDeps> & { m?: Model; budget?: Budget; visitorOk
 
 async function turn(d: ScoutDeps, message: string, conversation?: string) {
   const events: ScoutEvent[] = []
-  await scoutTurn(message, conversation, d, async (e) => { events.push(e) })
+  await scoutTurn(message, conversation, d, async (e) => { events.push(e) }, conversation ? await d.ownerToken(conversation) : undefined)
   return events
 }
 
@@ -115,6 +118,62 @@ const SYNTHETIC_RECORDED = [
 ]
 
 describe('a scout turn', () => {
+  it('rejects missing and wrong owner tokens before any work or write', async () => {
+    const m = model(), { d, asked } = deps({ m })
+    await turn(d, 'My sister loves Phoebe Bridgers')
+    const before = JSON.stringify(await d.conversations.get('conv0001'))
+    m.calls = 0; asked.length = 0
+    let visitor = 0, budget = 0
+    d.live!.takeVisitorTurn = async () => { visitor++; return true }
+    d.live!.budget = { ...open, allow: async () => { budget++; return true } }
+    for (const token of [undefined, 'wrong']) {
+      const events: ScoutEvent[] = []
+      await scoutTurn('Cheaper please', 'conv0001', d, async (e) => { events.push(e) }, token)
+      expect(events).toEqual([{ t: 'error', text: 'Only the person who started this conversation can change it. Ask again from the empty box to start your own.' }])
+      expect(JSON.stringify(await d.conversations.get('conv0001'))).toBe(before)
+    }
+    expect([m.calls, asked.length, visitor, budget]).toEqual([0, 0, 0, 0])
+    await turn(d, 'Cheaper please', 'conv0001')
+    expect(m.calls).toBeGreaterThan(0)
+    expect((await d.conversations.get('conv0001'))?.state.turn).toBe(2)
+  })
+
+  it('keeps paid purchases when replaying a recorded refinement', async () => {
+    const { d } = deps({ live: null, recorded: async () => [RECORDED] })
+    await turn(d, EXAMPLES[0])
+    const saved = (await d.conversations.get('conv0001'))!
+    const purchase: Purchase = { card: 't1c1', gift: 'Gift', order_id: 'ORDER123', amount: '30.00', status: 'captured', capture_id: 'CAP123' }
+    await d.conversations.put('conv0001', { ...saved.state, purchases: [purchase] } as typeof saved.state, saved.turns)
+    await turn(d, 'Cheaper please', 'conv0001')
+    expect((await d.conversations.get('conv0001'))?.state).toMatchObject({ purchases: [purchase], turn: 2 })
+  })
+
+  it.each(['buy first', 'refinement first'])('keeps a buy and refinement overlapped: %s', async (order) => {
+    const { d } = deps()
+    await turn(d, 'My sister loves Phoebe Bridgers')
+    const id = 'conv0001', saved = (await d.conversations.get(id))!
+    saved.state.cards[0].id = 't1c1'
+    await d.conversations.put(id, saved.state, saved.turns)
+    let started!: () => void, release!: () => void
+    const entered = new Promise<void>((resolve) => { started = resolve })
+    const wait = new Promise<void>((resolve) => { release = resolve })
+    const paypal = { createOrder: async () => ({ id: 'ORDER123', status: 'PAYER_ACTION_REQUIRED', approveUrl: 'https://paypal.test/pay' }) } as unknown as PayPal
+    const runBuy = () => buyTurn(id, 't1c1', { conversations: d.conversations, paypal, origin: 'https://gift.test', ownerSecret: 'test-secret', live: {
+      model: { name: 'fake', chat: async () => { if (order === 'refinement first') { started(); await wait }; return reply([call('buy_gift', { card_id: 't1c1', amount_usd: 33 })]) } }, budget: open, takeVisitorBuy: async () => true,
+    } }, async () => {}, 'paypal', awaitOwner, undefined, undefined, 33)
+    const awaitOwner = await d.ownerToken(id)
+    const original = d.live!.model
+    if (order === 'buy first') d.live!.model = { name: 'fake', chat: async (...args) => { started(); await wait; return original.chat(...args) } }
+    const pending = order === 'buy first' ? turn(d, 'Cheaper please', id) : runBuy()
+    await entered
+    if (order === 'buy first') await runBuy(); else await turn(d, 'Cheaper please', id)
+    release(); await pending
+    const after = (await d.conversations.get(id))!
+    expect(after.state).toMatchObject({ turn: 2, purchases: [{ order_id: 'ORDER123' }], attempts: [{ request_id: 'gs-conv0001-t1c1-a1', status: 'done', order_id: 'ORDER123' }] })
+    expect(after.turns).toHaveLength(3)
+    expect(after.turns.flat().filter((e) => e.t === 'order')).toHaveLength(1)
+    expect(after.turns.flat().filter((e) => e.t === 'run' && e.said === 'Cheaper please')).toHaveLength(1)
+  })
   it('runs live, saves the conversation, and ends with its share link', async () => {
     const { d } = deps()
     const events = await turn(d, 'My sister loves Phoebe Bridgers')
@@ -172,7 +231,7 @@ describe('a scout turn', () => {
     const { d } = deps({ live: null, recorded: async () => [RECORDED] })
     const events = await turn(d, 'My uncle likes jazz')
     expect(events[0]).toMatchObject({ t: 'run', mode: 'off' })
-    expect(events.at(-1)).toMatchObject({ t: 'error', text: expect.stringMatching(/off right now.*examples still work/) })
+    expect(events.at(-1)).toMatchObject({ t: 'error', text: 'The live taste graph is not available right now. The three examples still work.' })
   })
 
   it('replays an example when the budget is spent, and makes no model call', async () => {
@@ -211,7 +270,8 @@ describe('a scout turn', () => {
 describe('the request', () => {
   const req = (body: unknown) => new Request('https://x/api/scout', { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) })
   it('takes a message and a well formed conversation id, and refuses the rest', async () => {
-    expect(await parseScout(req({ message: '  My dad  ', conversation: 'conv0001' }))).toEqual({ ok: true, message: 'My dad', conversation: 'conv0001' })
+    expect(await parseScout(req({ message: '  My dad  ', conversation: 'conv0001', owner: 'token' }))).toEqual({ ok: true, message: 'My dad', conversation: 'conv0001', owner: 'token' })
+    expect(await parseScout(req({ message: 'My dad', owner: 123 }))).not.toHaveProperty('owner')
     expect(await parseScout(req({ message: 'My dad', conversation: '../etc' }))).toEqual({ ok: true, message: 'My dad', conversation: undefined })
     expect((await parseScout(req('not json'))).ok).toBe(false)
     expect((await parseScout(req({ message: 'x' }))).ok).toBe(false)

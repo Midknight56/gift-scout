@@ -7,14 +7,15 @@ import worker, { D1Samples, LayeredCache, recordedRunsFromD1, type Env } from '.
 import { newState } from '../../src/agent/agent'
 import { ownerToken } from '../../src/app/buy'
 import { EXAMPLES } from '../../src/app/scout'
-import { DEFAULT_DAILY_NEURONS, DEFAULT_ACCOUNT_NEURONS } from '../../src/limits'
+import { clock, dailyNeuronShare, DEFAULT_ACCOUNT_NEURONS } from '../../src/limits'
 import { channel3Enabled } from '../../src/channel3/flag'
-import { Conversations, D1Cache } from '../../src/store/d1'
+import { Conversations, D1Cache, QLOO_REFUSED_KEY } from '../../src/store/d1'
 import { FakeD1 } from './fake-d1'
 
 const databases: FakeD1[] = []
 const originalFetch = globalThis.fetch
 afterEach(() => {
+  vi.restoreAllMocks()
   globalThis.fetch = originalFetch
   for (const db of databases.splice(0)) db.close()
 })
@@ -51,6 +52,25 @@ async function stream(path: string, body: unknown, harness = setup(), headers: H
 }
 
 describe('worker front door', () => {
+  it('refuses reader refinements before models, tools, counters or writes, and permits the owner', async () => {
+    let modelCalls = 0, toolCalls = 0
+    const h = setup(true, { AI: { run: async () => { modelCalls++; return { response: 'Tell me more.', usage: { prompt_tokens: 1, completion_tokens: 1 } } } } as never, QLOO_API_KEY: 'fake' })
+    globalThis.fetch = (async () => { toolCalls++; throw new Error('unexpected call') }) as typeof fetch
+    const conversations = new Conversations(h.db), id = 'conv1234'
+    await conversations.put(id, { ...newState(id), turn: 1, said: ['Music'] }, [[{ t: 'say', text: 'Prior turn' }]])
+    const row = () => h.db.prepare('SELECT state, turns, updated_at FROM conversations WHERE id = ?').bind(id).first()
+    const before = JSON.stringify(await row())
+    for (const owner of [undefined, 'wrong']) {
+      const { events } = await stream('/api/scout', { message: 'Cheaper please', conversation: id, owner }, h)
+      expect(events).toEqual([{ t: 'error', text: 'Only the person who started this conversation can change it. Ask again from the empty box to start your own.' }])
+      expect(JSON.stringify(await row())).toBe(before)
+    }
+    expect([modelCalls, toolCalls, h.counterCalls]).toEqual([0, 0, 0])
+    const { events } = await stream('/api/scout', { message: 'Cheaper please', conversation: id, owner: await ownerToken(id, 'test') }, h)
+    expect(events[0]).toMatchObject({ t: 'run', turn: 2 })
+    expect(modelCalls).toBeGreaterThan(0)
+    expect((await conversations.get(id))?.turns).toHaveLength(2)
+  })
   it('reads Qloo samples and recorded runs from D1', async () => {
     const h = setup()
     const key = 'https://api.test/v2/insights?signal.interests.entities=synthetic'
@@ -86,7 +106,12 @@ describe('worker front door', () => {
   it('GET /api/examples answers the three EXAMPLES', async () => {
     const response = await call('/api/examples')
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ examples: EXAMPLES })
+    expect(await response.json()).toEqual({ examples: EXAMPLES, live: false })
+  })
+
+  it('GET /api/examples turns plain labels on only when PLAIN_LABELS is "on"', async () => {
+    expect(await (await call('/api/examples', {}, setup(true, { PLAIN_LABELS: 'on' }))).json()).toMatchObject({ examples: EXAMPLES, plain_labels: true })
+    expect(await (await call('/api/examples', {}, setup(true, { PLAIN_LABELS: 'off' }))).json()).not.toHaveProperty('plain_labels')
   })
 
   it('rejects a cross-site scout POST before starting work', async () => {
@@ -183,7 +208,7 @@ describe('worker front door', () => {
   it('makes no AI or Qloo calls at the app daily neuron cap', async () => {
     let aiCalls = 0
     const h = setup(true, { AI: { run: async () => { aiCalls++; throw new Error('AI must not run') } } as never, QLOO_API_KEY: 'fake' })
-    h.ledger.insertCall('gift-scout', new Date().toISOString().slice(0, 10), DEFAULT_DAILY_NEURONS)
+    h.ledger.insertCall('gift-scout', new Date().toISOString().slice(0, 10), dailyNeuronShare())
     let qlooCalls = 0
     globalThis.fetch = (async () => { qlooCalls++; throw new Error('Qloo must not run') }) as typeof fetch
     const { events } = await stream('/api/scout', { message: 'A new message about my aunt' }, h)
@@ -252,5 +277,147 @@ describe('worker front door', () => {
     const response = await call('/s/unknown1')
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('<html>asset page</html>')
+  })
+})
+
+describe('the live taste graph is not available', () => {
+  const SEARCH_CALL = { name: 'search_entities', arguments: { query: 'Phoebe Bridgers', type: 'artist' } }
+  async function mcpSearch(h: ReturnType<typeof setup>) {
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
+    const init = await call('/mcp', {
+      method: 'POST', headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }),
+    }, h)
+    const sid = init.headers.get('MCP-Session-Id')!
+    await call('/mcp', { method: 'POST', headers: { ...headers, 'MCP-Session-Id': sid }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: SEARCH_CALL }) }, h)
+    await Promise.all(h.pending)
+  }
+  const live = (count: { ai: number }) => ({
+    AI: { run: async () => { count.ai++; return { response: 'I could use more detail.', usage: { prompt_tokens: 1, completion_tokens: 1 } } } } as never,
+    QLOO_API_KEY: 'fake',
+  })
+  const replay = {
+    recorded_at: '2026-01-01T00:00:00Z',
+    turns: [[{ t: 'run', conversation: 'old', turn: 1, mode: 'live', said: EXAMPLES[0] }, { t: 'cards', cards: [], dropped: [] }]],
+    states: [{ ...newState('old'), turn: 1, said: [EXAMPLES[0]] }],
+  }
+
+  it('says so in plain words when there is no Qloo key', async () => {
+    const unknown = await stream('/api/scout', { message: 'A new message about my aunt' })
+    expect(unknown.events[0]).toMatchObject({ t: 'run', mode: 'off' })
+    expect(unknown.events).toContainEqual({ t: 'error', text: 'The live taste graph is not available right now. The three examples still work.' })
+  })
+
+  it('tells the page live works when the key and the model are there', async () => {
+    const h = setup(true, live({ ai: 0 }))
+    expect(await (await call('/api/examples', {}, h)).json()).toEqual({ examples: EXAMPLES, live: true })
+  })
+
+  it('stops live runs for six hours after Qloo refuses the key, then tries again', async () => {
+    const count = { ai: 0 }
+    const h = setup(true, live(count))
+    await h.db.prepare('INSERT INTO recorded_runs (example, run) VALUES (?, ?)').bind(EXAMPLES[0], JSON.stringify(replay)).run()
+    let qlooCalls = 0
+    globalThis.fetch = (async () => { qlooCalls++; return Response.json({ message: 'Invalid API key' }, { status: 401 }) }) as typeof fetch
+    await mcpSearch(h)
+    expect(qlooCalls).toBe(1)
+
+    expect(await (await call('/api/examples', {}, h)).json()).toEqual({ examples: EXAMPLES, live: false })
+    const example = await stream('/api/scout', { message: EXAMPLES[0] }, h)
+    expect(example.events[0]).toMatchObject({ t: 'run', mode: 'replay' })
+    const unknown = await stream('/api/scout', { message: 'A new message about my aunt' }, h)
+    expect(unknown.events).toContainEqual({ t: 'error', text: 'The live taste graph is not available right now. The three examples still work.' })
+    expect(count.ai).toBe(0)
+    expect(qlooCalls).toBe(1)
+
+    await h.db.prepare('UPDATE qloo_cache SET expires_at = 0 WHERE key = ?').bind(QLOO_REFUSED_KEY).run()
+    expect(await (await call('/api/examples', {}, h)).json()).toEqual({ examples: EXAMPLES, live: true })
+    const again = await stream('/api/scout', { message: 'A new message about my aunt' }, h)
+    expect(again.events[0]).toMatchObject({ t: 'run', mode: 'live' })
+  })
+})
+
+describe('reserved access', () => {
+  it('keeps December room for a signed visitor and stops at the full share', async () => {
+    vi.spyOn(clock, 'now').mockReturnValue(Date.parse('2026-12-10T12:00:00Z'))
+    let modelCalls = 0
+    const h = setup(true, {
+      JUDGE_PASS: 'private pass',
+      AI: { run: async () => { modelCalls++; return { response: 'Tell me more.', usage: { prompt_tokens: 1, completion_tokens: 1 } } } } as never,
+      QLOO_API_KEY: 'fake',
+    } as Partial<Env>)
+    h.ledger.insertCall('gift-scout', '2026-12-10', 2500)
+    const body = { message: 'My aunt loves music.' }
+    const publicRun = await stream('/api/scout', body, h)
+    expect(publicRun.events[0]).toMatchObject({ mode: 'off' })
+    expect(modelCalls).toBe(0)
+    const forged = await stream('/api/scout', body, h, { Cookie: 'gs_judge=madeup' })
+    expect(forged.events[0]).toMatchObject({ mode: 'off' })
+    expect(modelCalls).toBe(0)
+    const pass = await call('/judge?pass=private%20pass', {}, h)
+    const cookie = pass.headers.get('Set-Cookie')!.split(';')[0]
+    const signed = await stream('/api/scout', body, h, { Cookie: cookie })
+    expect(signed.events[0]).toMatchObject({ mode: 'live' })
+    expect(modelCalls).toBeGreaterThan(0)
+    const spent = await h.ledger.prepare('SELECT COALESCE(SUM(neurons), 0) AS total FROM ai_calls WHERE day = ?').bind('2026-12-10').first<{ total: number }>()
+    h.ledger.insertCall('gift-scout', '2026-12-10', 3500 - spent!.total)
+    modelCalls = 0
+    const full = await stream('/api/scout', { message: 'My uncle loves books.' }, h, { Cookie: cookie })
+    expect(full.events[0]).toMatchObject({ mode: 'off' })
+    expect(modelCalls).toBe(0)
+  })
+})
+
+describe('signed request caps', () => {
+  it('passes the signed turns limit and keeps the shared account ceiling', async () => {
+    vi.spyOn(clock, 'now').mockReturnValue(Date.parse('2026-12-10T12:00:00Z'))
+    let modelCalls = 0
+    const h = setup(true, {
+      JUDGE_PASS: 'private pass', QLOO_API_KEY: 'fake',
+      AI: { run: async () => { modelCalls++; return { response: 'Tell me more.', usage: { prompt_tokens: 1, completion_tokens: 1 } } } } as never,
+    })
+    const limits: number[] = []
+    h.env.COUNTERS = { idFromName: (name: string) => name, get: (name: string) => ({ take: async (_day: string, limit: number) => { if (name.startsWith('turns:')) limits.push(limit); return true } }) } as unknown as Env['COUNTERS']
+    const cookie = `gs_judge=${await ownerToken('judge-v1', 'test')}`
+    await stream('/api/scout', { message: 'My aunt loves music.' }, h, { Cookie: cookie })
+    expect(limits).toEqual([40])
+    h.ledger.insertCall('another-app', '2026-12-10', DEFAULT_ACCOUNT_NEURONS)
+    modelCalls = 0
+    const capped = await stream('/api/scout', { message: 'My uncle loves books.' }, h, { Cookie: cookie })
+    expect(capped.events[0]).toMatchObject({ mode: 'off' })
+    expect(modelCalls).toBe(0)
+  })
+
+  it('uses one Qloo counter with reserved room and checks the cookie on each request', async () => {
+    vi.spyOn(clock, 'now').mockReturnValue(Date.parse('2026-12-10T12:00:00Z'))
+    const h = setup(true, { JUDGE_PASS: 'private pass', QLOO_API_KEY: 'fake' })
+    const limits: Array<[string, number]> = []
+    let total = 1700, upstream = 0
+    h.env.COUNTERS = { idFromName: (name: string) => name, get: (name: string) => ({ take: async (_day: string, limit: number) => {
+      limits.push([name, limit])
+      if (name !== 'qloo-total') return true
+      if (total >= limit) return false
+      total++; return true
+    } }) } as unknown as Env['COUNTERS']
+    globalThis.fetch = (async () => { upstream++; return Response.json({ results: [] }) }) as typeof fetch
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
+    const init = await call('/mcp', { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }) }, h)
+    const sid = init.headers.get('MCP-Session-Id')!
+    const search = async (cookie: string, query: string) => {
+      await call('/mcp', { method: 'POST', headers: { ...headers, 'MCP-Session-Id': sid, Cookie: cookie }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'search_entities', arguments: { query, type: 'artist' } } }) }, h)
+    }
+    await search('gs_judge=madeup', 'First artist')
+    expect(upstream).toBe(0)
+    expect(limits.at(-1)).toEqual(['qloo-total', 1700])
+    const cookie = `gs_judge=${await ownerToken('judge-v1', 'test')}`
+    await search(cookie, 'Second artist')
+    expect(upstream).toBeGreaterThan(0)
+    const completedCalls = upstream
+    expect(limits.at(-1)).toEqual(['qloo-total', 2000])
+    expect(limits.find(([name]) => name.startsWith('visitor:'))?.[1]).toBe(600)
+    total = 2000
+    await search(cookie, 'Third artist')
+    expect(upstream).toBe(completedCalls)
+    await Promise.all(h.pending)
   })
 })

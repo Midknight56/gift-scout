@@ -5,7 +5,7 @@ vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }))
 
 import worker, { type Env } from '../../src/worker'
 import { newState } from '../../src/agent/agent'
-import { runCompare } from '../../src/agent/compare'
+import { firstTurnContexts, runCompare } from '../../src/agent/compare'
 import type { Model } from '../../src/agent/model'
 import type { ScoutEvent } from '../../src/agent/events'
 import { ownerToken } from '../../src/app/buy'
@@ -26,18 +26,18 @@ const ideas = [
   { gift: 'A live show', name: 'Unknown Artist', kind: 'artist' },
 ]
 
-function setup(opts: { take?: boolean; ai?: boolean; qloo?: boolean; reply?: unknown; scoreId?: string; beforeModel?: () => Promise<void> } = {}) {
+function setup(opts: { take?: boolean; ai?: boolean; qloo?: boolean; reply?: unknown; scoreId?: string; message?: string; insightArgs?: Record<string, unknown>; beforeModel?: () => Promise<void> } = {}) {
   const db = new FakeD1(), ledger = new FakeD1()
   dbs.push(db, ledger)
   const id = 'compare1'
-  const message = 'My aunt loves folk music and quiet weekends.'
+  const message = opts.message ?? 'My aunt loves folk music and quiet weekends.'
   const state = { ...newState(id), turn: 1, said: [message], calls: 4, cards: [
     { id: 't1c1', gift: 'A record', why: 'She likes music.', price_low: 10, price_high: 20, entity: { id: 'CARD1', name: 'Card one', type: 'brand', affinity: 0.9 }, seeds: ['Folk artist'], from_call: 2 },
     { id: 't1c2', gift: 'A book', why: 'She likes quiet days.', price_low: 10, price_high: 20, entity: { id: 'CARD2', name: 'Card two', type: 'book', affinity: 0.7 }, seeds: ['Folk artist'], from_call: 3 },
   ] }
   const savedEvents: ScoutEvent[] = [
     { t: 'run', conversation: id, turn: 1, mode: 'live', said: message },
-    { t: 'call', n: 1, tool: 'taste_insights', args: { seed_ids: ['SEED-ONE', 'SEED-TWO'], target_type: 'brand' } },
+    { t: 'call', n: 1, tool: 'taste_insights', args: opts.insightArgs ?? { seed_ids: ['SEED-ONE', 'SEED-TWO'], target_type: 'brand', audience_gender: 'female' } },
     { t: 'cards', cards: state.cards as never[], dropped: [] },
   ]
   const conversations = new Conversations(db)
@@ -76,7 +76,7 @@ function setup(opts: { take?: boolean; ai?: boolean; qloo?: boolean; reply?: unk
       const id = url.searchParams.get('filter.results.entities')!
       const affinity = id === 'PLAIN-BRAND' ? 0.8 : 0.6
       const type = url.searchParams.get('filter.type')!.replace('urn:entity:', '')
-      return new Response(JSON.stringify({ results: { entities: [{ entity_id: opts.scoreId ?? id, name: id === 'PLAIN-BRAND' ? 'North Shore' : 'Quiet Harbor', subtype: 'urn:entity:' + type, query: { affinity } }] } }), { status: 200 })
+      return new Response(JSON.stringify({ results: { entities: [{ entity_id: opts.scoreId ?? id, name: type === 'place' ? 'Lisbon Table' : id === 'PLAIN-BRAND' ? 'North Shore' : 'Quiet Harbor', subtype: 'urn:entity:' + type, query: { affinity } }] } }), { status: 200 })
     }
     return new Response('{}', { status: 404 })
   }) as typeof fetch
@@ -94,6 +94,73 @@ async function request(h: ReturnType<typeof setup>, owner?: string) {
 }
 
 describe('POST /api/compare', () => {
+  it('compares successful first turn cards after an empty cards event', async () => {
+    const h = setup()
+    await h.ready
+    await new Conversations(h.db).update(h.id, fresh => ({ ...fresh,
+      turns: [[{ t: 'cards', cards: [], dropped: [] }, ...fresh.turns[0]], ...fresh.turns.slice(1)],
+    }))
+    const result = await request(h, await ownerToken(h.id, 'test'))
+    expect(h.modelCalls).toBe(1)
+    expect(result.events).toContainEqual(expect.objectContaining({ t: 'compare', qloo_mean: 0.8 }))
+  })
+
+  it('keeps a concurrent refinement when comparison finishes', async () => {
+    const h = setup({ beforeModel: async () => {
+      await new Conversations(h.db).update(h.id, (fresh) => ({
+        state: { ...fresh.state, turn: 2, calls: 20, said: [...fresh.state.said, 'Cheaper please'] },
+        turns: [...fresh.turns, [{ t: 'say', text: 'New refinement' }]],
+      }))
+    } })
+    await request(h, await ownerToken(h.id, 'test'))
+    const saved = (await new Conversations(h.db).get(h.id))!
+    expect(saved.state).toMatchObject({ turn: 2, calls: 20, said: [expect.any(String), 'Cheaper please'] })
+    expect(saved.turns[1]).toEqual([{ t: 'say', text: 'New refinement' }])
+    expect(saved.turns.at(-1)?.some((e) => e.t === 'compare')).toBe(true)
+  })
+
+  it('keeps each kind separate and unions only first turn signals for the nearest context', () => {
+    const call = (n: number, args: Record<string, unknown>): ScoutEvent => ({ t: 'call', n, tool: 'taste_insights', args })
+    const contexts = firstTurnContexts([[
+      call(1, { target_type: 'brand', seed_ids: ['BRAND-SEED'], audience_age: '35_to_44' }),
+      call(2, { target_type: 'place', seed_tags: ['FOOD'], location: 'Lisbon', audience_gender: 'female', filter_tags: ['urn:tag:genre:place:restaurant', 'urn:tag:genre:book:fiction'] }),
+      call(3, { target_type: 'brand', seed_ids: ['BRAND-SEED', 'SECOND-SEED'], seed_tags: ['HOBBY'] }),
+    ], [call(4, { target_type: 'book', seed_ids: ['LATER-SEED'], location: 'Porto', audience_gender: 'male' })]])
+    expect(contexts.kinds.get('brand')).toEqual({ seedIds: ['BRAND-SEED', 'SECOND-SEED'], seedTags: ['HOBBY'], filterTags: [], age: '35_to_44' })
+    expect(contexts.kinds.get('place')).toEqual({ seedIds: [], seedTags: ['FOOD'], filterTags: ['urn:tag:genre:place:restaurant'], location: 'Lisbon', gender: 'female' })
+    expect(contexts.kinds.has('book')).toBe(false)
+    expect(contexts.nearest).toEqual({ seedIds: ['BRAND-SEED', 'SECOND-SEED'], seedTags: ['FOOD', 'HOBBY'], filterTags: ['urn:tag:genre:place:restaurant'], location: 'Lisbon', gender: 'female', age: '35_to_44' })
+  })
+
+  it('does not infer an audience absent from the original call', async () => {
+    const h = setup({ insightArgs: { seed_ids: ['SEED-ONE', 'SEED-TWO'], target_type: 'brand' } })
+    await request(h, await ownerToken(h.id, 'test'))
+    expect(h.qlooUrls.filter((url) => url.pathname === '/v2/insights').every((url) => !url.searchParams.has('signal.demographics.gender'))).toBe(true)
+  })
+
+  it('preserves the place signals and filters used for a dinner gift in Lisbon', async () => {
+    const h = setup({
+      message: 'A dinner gift for my aunt in Lisbon who loves Portuguese food',
+      insightArgs: { target_type: 'place', seed_ids: ['SEED-ONE', 'SEED-TWO'], seed_tags: ['urn:tag:cuisine:qloo:portuguese'], filter_tags: ['urn:tag:genre:place:restaurant'], location: 'Lisbon', audience_gender: 'female', audience_age: '55_and_older' },
+      reply: { response: JSON.stringify([{ gift: 'Dinner', name: 'Lisbon Table', kind: 'place' }]) },
+    })
+    const { events } = await request(h, await ownerToken(h.id, 'test'))
+    const url = h.qlooUrls.find((url) => url.pathname === '/v2/insights')!
+    expect(url.searchParams.get('signal.interests.tags')).toBe('urn:tag:cuisine:qloo:portuguese')
+    expect(url.searchParams.get('filter.location.query')).toBe('Lisbon')
+    expect(url.searchParams.get('signal.demographics.gender')).toBe('female')
+    expect(url.searchParams.get('signal.demographics.age')).toBe('55_and_older')
+    expect(url.searchParams.get('filter.tags')).toBe('urn:tag:genre:place:restaurant')
+    expect(events.find((event) => event.t === 'compare')).toMatchObject({ plain: [{ context: 'same' }], coverage: { plain_found: 1, plain_total: 1, cards_scored: 2, cards_total: 2 } })
+    expect(h.qlooCalls).toBe(2)
+  })
+
+  it('marks a kind absent from the first turn as nearest', async () => {
+    const h = setup()
+    const { events } = await request(h, await ownerToken(h.id, 'test'))
+    expect(events.find((event) => event.t === 'compare')).toMatchObject({ plain: [{ context: 'same' }, { context: 'nearest' }, { context: 'nearest' }] })
+  })
+
   it('reserves budget before concurrent comparisons call the model', async () => {
     const db = new FakeD1(); dbs.push(db)
     const ledger = new NeuronLedger(db, { app: 'gift-scout', dailyCap: 50, accountCap: 50, reserve: 50, day: () => '2026-10-23' })
@@ -104,7 +171,7 @@ describe('POST /api/compare', () => {
       await modelGate
       return { content: 'No ideas', tool_calls: [], prompt_tokens: 1, completion_tokens: 1 }
     } }
-    const options = { message: 'compare these', seedIds: [], cards: [], qloo: {} as never, model, budget: ledger, emit: async () => {} }
+    const options = { message: 'compare these', turns: [], cards: [], qloo: {} as never, model, budget: ledger, emit: async () => {} }
     const first = runCompare(options)
     const second = runCompare(options)
     releaseModel()
@@ -124,9 +191,9 @@ describe('POST /api/compare', () => {
     const result = events.find((event) => event.t === 'compare')!
     expect(result).toMatchObject({ plain_mean: 0.7, qloo_mean: 0.8, not_found: 1 })
     expect(result.plain).toEqual([
-      { ...ideas[0], found: true, affinity: 0.8 },
-      { ...ideas[1], found: true, affinity: 0.6 },
-      { ...ideas[2], found: false },
+      { ...ideas[0], context: 'same', found: true, affinity: 0.8, matched: { id: 'PLAIN-BRAND', name: 'North Shore', type: 'brand' } },
+      { ...ideas[1], context: 'nearest', found: true, affinity: 0.6, matched: { id: 'PLAIN-BOOK', name: 'Quiet Harbor', type: 'book' } },
+      { ...ideas[2], context: 'nearest', found: false },
     ])
     expect(events.map((event) => event.t)).toEqual(['run', 'call', 'result', 'call', 'result', 'call', 'result', 'call', 'result', 'call', 'result', 'compare', 'usage', 'done'])
     const usage = await h.ledger.prepare('SELECT neurons FROM ai_calls').bind().first<{ neurons: number }>()
@@ -154,7 +221,7 @@ describe('POST /api/compare', () => {
     const h = setup({ reply: { response: JSON.stringify([ideas[0]]), usage: { prompt_tokens: 10, completion_tokens: 10 } }, scoreId: 'SOME-OTHER-ENTITY' })
     const { events } = await request(h, await ownerToken(h.id, 'test'))
     const result = events.find((event) => event.t === 'compare')!
-    expect(result.plain).toEqual([{ ...ideas[0], found: false }])
+    expect(result.plain).toEqual([{ ...ideas[0], context: 'same', found: false }])
     expect(result.plain_mean).toBeNull()
   })
 
@@ -228,7 +295,7 @@ describe('POST /api/compare', () => {
     const { events } = await request(h, await ownerToken(h.id, 'test'))
     expect(events).toMatchObject([
       { t: 'run', mode: 'off', purpose: 'compare' },
-      { t: 'error', text: 'Comparing needs live scouting, which is off right now.' },
+      { t: 'error', text: 'Comparing needs the live taste graph, which is not available right now.' },
       { t: 'done' },
     ])
   })

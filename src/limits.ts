@@ -18,13 +18,21 @@ export const DAILY_TURNS_PER_VISITOR = 12
 export const clock = { now: (): number => Date.now() }
 export const VISITOR_WINDOW_FROM = Date.parse('2026-11-02T00:00:00Z')
 export const VISITOR_WINDOW_UNTIL = Date.parse('2026-11-06T12:00:00Z')
+export const DECEMBER_FROM = Date.parse('2026-12-01T05:00:00Z')
+export const DECEMBER_UNTIL = Date.parse('2026-12-16T05:00:00Z')
+const VISITOR_WINDOWS = [
+  [VISITOR_WINDOW_FROM, VISITOR_WINDOW_UNTIL],
+  [DECEMBER_FROM, DECEMBER_UNTIL],
+] as const
+const inWindows = (windows: readonly (readonly [number, number])[], now: number) =>
+  windows.some(([from, until]) => from <= now && now < until)
 export const JUDGING_VISITOR_FACTOR = 4
 // Inside the window a visitor may take 48 turns, 12 compares, 24 buys, 600 Qloo calls and 120 Channel3 calls a day,
 // but every whole app total stays (2,000 Qloo calls, the 3,000 month floor, 300 Channel3 calls, the neuron share of
 // 3,500 under the account cap of 9,500, under the free 10,000), so the spend ceiling is the same and judging still
 // costs $0. Buys are PayPal sandbox orders (play money) and each model call is counted in the neuron share.
 export function perVisitor(normal: number, now: number = clock.now()): number {
-  return VISITOR_WINDOW_FROM <= now && now < VISITOR_WINDOW_UNTIL ? normal * JUDGING_VISITOR_FACTOR : normal
+  return inWindows(VISITOR_WINDOWS, now) ? normal * JUDGING_VISITOR_FACTOR : normal
 }
 
 // Workers AI on the Workers Free plan: 10,000 neurons a day for the whole account, shared by the hackathon apps through
@@ -41,8 +49,14 @@ export const DEFAULT_ACCOUNT_NEURONS = 9500
 export const JUDGING_DAILY_NEURONS = 3500
 export const JUDGING_FROM = Date.parse('2026-11-02T05:00:00Z')
 export const JUDGING_UNTIL = Date.parse('2026-11-06T04:45:00Z')
+const NEURON_WINDOWS = [
+  [JUDGING_FROM, JUDGING_UNTIL],
+  [DECEMBER_FROM, DECEMBER_UNTIL],
+] as const
+// December's share is 3,500 a day. The shared account cap of 9,500 stops every app together before the free
+// 10,000 a day, so December costs $0 too.
 export function dailyNeuronShare(now: number = clock.now()): number {
-  return JUDGING_FROM <= now && now < JUDGING_UNTIL ? JUDGING_DAILY_NEURONS : DEFAULT_DAILY_NEURONS
+  return inWindows(NEURON_WINDOWS, now) ? JUDGING_DAILY_NEURONS : DEFAULT_DAILY_NEURONS
 }
 // The room held in the ledger before each Workers AI call; the row then takes the call's real cost, even when that is
 // more. Measured in the shared ledger: 23 Oct 2026, 42 calls, largest 33.3, mean 21.9; 24 Oct, 65 calls, largest 48.4,
@@ -57,3 +71,20 @@ export const DAILY_COMPARES_PER_VISITOR = 3
 
 /** The pause between events of a cached or recorded run: a first turn of about 15 events reads in about 3 seconds. */
 export const REPLAY_PACE_MS = 160
+
+// 1,000 neurons at about 120 a first turn leaves about 8 first turns after the public is spent, inside the app's
+// 3,500, inside the account's 9,500, inside the free 10,000.
+export const JUDGE_RESERVE_NEURONS = 1000
+export const JUDGE_RESERVE_QLOO = 300
+export const JUDGE_RESERVE_CHANNEL3 = 50
+export const JUDGE_TURNS = 40
+export const JUDGE_BUYS = 20
+export const JUDGE_COMPARES = 10
+
+export function publicLimit(total: number, reserve: number, judge: boolean, now = clock.now()): number {
+  return !judge && inWindows(NEURON_WINDOWS, now) ? Math.max(0, total - reserve) : total
+}
+
+export function visitorLimit(normal: number, judge: boolean, judgeLimit = normal * 4, now = clock.now()): number {
+  return judge && inWindows(VISITOR_WINDOWS, now) ? judgeLimit : perVisitor(normal, now)
+}

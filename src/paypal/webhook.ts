@@ -14,9 +14,11 @@ export function parseEvent(raw: string): PayPalEvent | null {
   const r = body.resource
   if (body.event_type === 'CHECKOUT.ORDER.APPROVED') {
     const id = r.id, customId = r.purchase_units?.[0]?.custom_id
-    return typeof id === 'string' && typeof customId === 'string' ? { type: body.event_type, orderId: id, customId } : null
+    const amount = r.purchase_units?.[0]?.amount?.value
+    return typeof id === 'string' && typeof customId === 'string' ? { type: body.event_type, orderId: id, customId, ...(typeof amount === 'string' ? { amount } : {}) } : null
   }
   if (body.event_type === 'PAYMENT.CAPTURE.COMPLETED') {
+    if (r.status !== undefined && r.status !== 'COMPLETED') return null
     const captureId = r.id, customId = r.custom_id, orderId = r.supplementary_data?.related_ids?.order_id, amount = r.amount?.value
     return [captureId, customId, orderId, amount].every((x) => typeof x === 'string')
       ? { type: body.event_type, captureId, customId, orderId, amount } : null

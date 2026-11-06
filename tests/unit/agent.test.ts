@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 import { checkCards, flattenIdeas, MAX_MODEL_CALLS, newState, pickProduct, plain, productQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import { neuronsFor, readReply, stripThinking, WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
@@ -682,22 +682,28 @@ describe('Channel3 products', () => {
   })
 
   const product = (title: string, price: number, brand?: string) => ({ id: title, title, price, currency: 'USD', url: 'https://shop.test/item', ...(brand ? { brand } : {}) })
-  it('picks the first product in band whose title or brand matches the entity, folding accents', () => {
+  it('picks a product in band whose title or exact brand matches the entity, folding accents', () => {
     const entity = 'John le Carré'
-    expect(pickProduct({ ok: true, products: [product('John le Carré novel', 35)] }, entity, 40)?.price).toBe(35)
-    expect(pickProduct({ ok: true, products: [product('The Complete Works', 35, 'John le Carré Books')] }, entity, 40)?.title).toBe('The Complete Works')
+    expect(pickProduct({ ok: true, cached: false, products: [product('John le Carré novel', 35)] }, entity, 'artist', 40)?.product.price).toBe(35)
+    expect(pickProduct({ ok: true, cached: false, products: [product('The Complete Works', 35, 'John le Carré')] }, entity, 'brand', 40)?.product.title).toBe('The Complete Works')
+  })
+
+  it('allows entity name words that also identify companion material', () => {
+    const real = product('Notes from Underground (Paperback)', 18)
+    expect(pickProduct({ ok: true, cached: false, products: [real] }, 'Notes from Underground', 'book', 40)).toEqual({ product: real, match: 'exact title' })
+    expect(pickProduct({ ok: true, cached: false, products: [product('Notes from Underground Study Guide', 18)] }, 'Notes from Underground', 'book', 40)).toBeUndefined()
   })
 
   it('rejects over band, under minimum, and wrong entity products', () => {
-    expect(pickProduct({ ok: true, products: [product('Fender strap', 41)] }, 'Fender', 40)).toBeUndefined()
-    expect(pickProduct({ ok: true, products: [product('Fender strap', 4.99)] }, 'Fender', 40)).toBeUndefined()
-    expect(pickProduct({ ok: true, products: [product('Gibson strap', 30)] }, 'Fender', 40)).toBeUndefined()
+    expect(pickProduct({ ok: true, cached: false, products: [product('Fender strap', 41)] }, 'Fender', 'brand', 40)).toBeUndefined()
+    expect(pickProduct({ ok: true, cached: false, products: [product('Fender strap', 4.99)] }, 'Fender', 'brand', 40)).toBeUndefined()
+    expect(pickProduct({ ok: true, cached: false, products: [product('Gibson strap', 30)] }, 'Fender', 'brand', 40)).toBeUndefined()
   })
   it('picks only USD products, ignoring currency case', () => {
     const cad = { ...product('Fender strap', 30), currency: 'CAD' }
     const lowerUsd = { ...product('Fender strap', 30), currency: 'usd' }
-    expect(pickProduct({ ok: true, products: [cad] }, 'Fender', 40)).toBeUndefined()
-    expect(pickProduct({ ok: true, products: [cad, lowerUsd] }, 'Fender', 40)).toBe(lowerUsd)
+    expect(pickProduct({ ok: true, cached: false, products: [cad] }, 'Fender', 'brand', 40)).toBeUndefined()
+    expect(pickProduct({ ok: true, cached: false, products: [cad, lowerUsd] }, 'Fender', 'brand', 40)).toEqual({ product: lowerUsd, match: 'title starts with the name' })
   })
 
   it('prefixes brand searches by gender and leaves book searches alone', async () => {
@@ -708,7 +714,7 @@ describe('Channel3 products', () => {
     const events: ScoutEvent[] = [], searches: unknown[] = []
     const products = { async search(query: string, opts?: { limit?: number; maxPrice?: number }) {
       searches.push({ query, opts })
-      return { ok: true as const, products: [product('Fender woven strap', 35)] }
+      return { ok: true as const, cached: false, products: [product('Fender woven strap', 35)] }
     } }
     const next = await runTurn({ message: 'My brother. He loves Phoebe Bridgers and Korean food. He lives in Toronto. Under 60 dollars.', state: newState('conv1'), model, tools: qlooTools(), ctx, budget: budget(), products, now: () => 10, emit: (e) => { events.push(e) } })
     expect(searches.map((search) => (search as { query: string }).query)).toEqual(["men's Fender strap", 'Homesick'])
@@ -716,9 +722,54 @@ describe('Channel3 products', () => {
     expect(next.cards[1].product).toBeUndefined()
     const calls = events.filter((e) => e.t === 'call')
     expect(calls.find((event) => event.t === 'call' && event.tool === 'search_products')).toMatchObject({ tool: 'search_products', args: { query: "men's Fender strap", max_price: 40 } })
-    expect(events.find((e) => e.t === 'result' && e.tool === 'search_products')).toMatchObject({ ok: true, top: [{ name: 'Fender woven strap', type: 'product', price: 35 }] })
+    expect(events.find((e) => e.t === 'result' && e.tool === 'search_products')).toMatchObject({ ok: true, text: 'Product found: title starts with the name.', top: [{ name: 'Fender woven strap', type: 'product', price: 35 }] })
     const shown = events.find((e) => e.t === 'cards') as Extract<ScoutEvent, { t: 'cards' }>
-    expect(shown.cards).toEqual(expect.arrayContaining([expect.objectContaining({ product: { title: 'Fender woven strap', price: 35, url: 'https://shop.test/item', source: 'channel3' } })]))
+    expect(shown.cards).toEqual(expect.arrayContaining([expect.objectContaining({ product: expect.objectContaining({ id: 'Fender woven strap', title: 'Fender woven strap', price: 35, url: 'https://shop.test/item', source: 'channel3', match: 'title starts with the name' }) })]))
+  })
+
+  it('keeps the person budget above the model plan and uses the plan when no budget was given', async () => {
+    const { ctx } = qloo()
+    const affordable = [card('B-FENDER', 'A Fender strap', 20, 30), card('K-HOMESICK', 'A Homesick book', 15, 25), card('P-SONG', 'A Song Exploder item', 10, 20), card('L-NAMOO', 'Dinner at Cafe Namoo', 10, 20), card('D-SEOUL', 'A Seoul trip', 10, 20)]
+    const model = scripted([reply([call('plan_scout', { ...PLAN, budget_max: 100 })]), reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender guitar', 60, 70)] })]), reply([call('present_gifts', { cards: affordable })])])
+    const state = await runTurn({ message: 'a gift for my dad, under 30 dollars', state: newState('budget'), model, tools: qlooTools(), ctx, budget: budget(), emit: () => {} })
+    expect(state.budget_max).toBe(30)
+    expect(state.cards.every((item) => item.price_low <= 30)).toBe(true)
+    const noBudget = scripted([reply([call('plan_scout', { ...PLAN, budget_max: 40 })]), reply([call('present_gifts', { cards: affordable })])])
+    const state2 = await runTurn({ message: 'a gift for my dad', state: newState('budget2'), model: noBudget, tools: qlooTools(), ctx, budget: budget(), emit: () => {} })
+    expect(state2.budget_max).toBe(40)
+  })
+
+  it('recovers from empty present calls and reports an error if they never become valid', async () => {
+    for (const empty of [{}, { ideas: {} }, { cards: [] }]) {
+      const valid = [card('B-FENDER', 'A Fender strap'), card('K-HOMESICK', 'A Homesick book'), card('P-SONG', 'A Song Exploder item'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A Seoul trip')]
+      const model = scripted([reply([call('plan_scout', PLAN)]), reply([call('present_gifts', empty)]), reply([call('present_gifts', { cards: valid })])])
+      const { events, state } = await turn(model)
+      expect(state.cards).toHaveLength(5)
+      expect(events.some((event) => event.t === 'error')).toBe(false)
+    }
+    const { ctx } = qloo()
+    const model = scripted([reply([call('plan_scout', PLAN)]), ...Array.from({ length: MAX_MODEL_CALLS - 1 }, () => reply([call('present_gifts', {})]))])
+    const events: ScoutEvent[] = []
+    await runTurn({ message: SISTER, state: newState('empty'), model, tools: qlooTools(), ctx, budget: budget(), emit: (e) => { events.push(e) } })
+    expect(events.some((event) => event.t === 'error')).toBe(true)
+  })
+
+  it('review 5: keeps the suggestion when search returns the wrong gift type', async () => {
+    const cards = [card('B-FENDER', 'A Fender strap'), card('K-HOMESICK', 'A Homesick book'), card('P-SONG', 'A Song Exploder item'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A Seoul trip')]
+    const model = scripted([reply([call('plan_scout', PLAN)]), reply([call('present_gifts', { cards })])])
+    const next = await runTurn({ message: SISTER, state: newState('types'), model, tools: qlooTools(), ctx: qloo().ctx, budget: budget(),
+      products: { search: async () => ({ ok: true, cached: false, products: [product('Fender guitar', 35)] }) }, emit: () => {} })
+    expect(next.cards[0].gift).toBe('A Fender strap')
+    expect(next.cards[0].product).toBeUndefined()
+  })
+  it('cleans product title and brand while preserving the URL and reports cached searches', async () => {
+    const cards = [card('B-FENDER', 'A Fender strap'), card('K-HOMESICK', 'A Homesick book'), card('P-SONG', 'A Song Exploder item'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A Seoul trip')]
+    const model = scripted([reply([call('plan_scout', PLAN)]), reply([call('present_gifts', { cards })])])
+    const events: ScoutEvent[] = []
+    const found = product('Fender \u2014 woven-strap', 35, 'Acme\u2013Books')
+    const result = await runTurn({ message: SISTER, state: newState('clean'), model, tools: qlooTools(), ctx: qloo().ctx, budget: budget(), products: { search: async () => ({ ok: true, cached: true, products: [found] }) }, emit: (e) => { events.push(e) } })
+    expect(result.cards[0].product).toMatchObject({ title: 'Fender, woven strap', brand: 'Acme Books', url: 'https://shop.test/item' })
+    expect(events.find((event) => event.t === 'result' && event.tool === 'search_products')).toMatchObject({ cached: true })
   })
 
   it.each(['capped', 'spent'] as const)('keeps cards and finishes when product search is %s', async (reason) => {
@@ -792,4 +843,75 @@ describe('error states', () => {
     const errors = events.filter((e) => e.t === 'error')
     expect(errors).toEqual([{ t: 'error', text: 'Qloo is not answering right now. The three examples still work.' }])
   })
+})
+
+
+describe('intended product ranking', () => {
+  const item = (title: string, price = 20, brand?: string) => ({ id: title, title, price, currency: 'USD', url: 'https://shop.test/item', brand })
+  it('picks the book instead of a poster and refuses a poster alone', () => {
+    const poster = item('Fallen Angel poster', 20), book = item('Fallen Angel', 18)
+    expect(pickProduct({ ok: true, cached: false, products: [poster] }, 'Fallen Angel', 'book', 40)).toBeUndefined()
+    expect(pickProduct({ ok: true, cached: false, products: [poster, book] }, 'Fallen Angel', 'book', 40)).toEqual({ product: book, match: 'exact title' })
+  })
+  it.each(['poster', 'print', 'art print', 'canvas', 'shirt', 't shirt', 'tee', 'hoodie', 'sweatshirt', 'mug', 'cup', 'sticker', 'decal', 'magnet', 'pin', 'keychain', 'tote', 'bag', 'puzzle', 'figure', 'figurine', 'toy', 'costume', 'mask', 'candle', 'ornament', 'calendar', 'journal', 'notebook', 'bookmark'])('refuses a book title on a %s', (kind) => {
+    expect(pickProduct({ ok: true, cached: false, products: [item(`Fallen Angel ${kind.toUpperCase()}`)] }, 'Fallen Angel', 'book', 40)).toBeUndefined()
+  })
+  it('refuses a matching title in a wall art category', () => {
+    const art = { ...item('Fallen Angel'), category: { slug: 'wall-art', title: 'Wall Art', path: ['Home', 'Wall Art'] } }
+    expect(pickProduct({ ok: true, cached: false, products: [art] }, 'Fallen Angel', 'book', 40)).toBeUndefined()
+  })
+  it.each([
+    { slug: 'books', title: 'Reading', path: [] },
+    { slug: 'reading', title: 'Books', path: [] },
+    { slug: 'fiction', title: 'Fiction', path: ['Books', 'Fiction'] },
+  ])('reports the category confirmed book kind: %j', (category) => {
+    const book = { ...item('Fallen Angel'), category }
+    expect(pickProduct({ ok: true, cached: false, products: [book] }, 'Fallen Angel', 'book', 40)).toEqual({ product: book, match: 'exact title', kind: 'book' })
+  })
+  it('does not count kind words that belong to the entity name', () => {
+    const book = item('The Poster (Paperback)')
+    expect(pickProduct({ ok: true, cached: false, products: [book] }, 'The Poster', 'book', 40)).toEqual({ product: book, match: 'exact title' })
+    expect(pickProduct({ ok: true, cached: false, products: [item('The Poster mug')] }, 'The Poster', 'book', 40)).toBeUndefined()
+  })
+  it('reports a book confirmed by its category in the product result', async () => {
+    const state = laterState()
+    state.found.BOOK = { entity: { id: 'BOOK', name: 'Fallen Angel', type: 'book' }, seeds: ['Phoebe Bridgers'], from_call: 1 }
+    const events: ScoutEvent[] = []
+    const book = { ...item('Fallen Angel', 18), category: { slug: 'fiction', title: 'Fiction', path: ['Books', 'Fiction'] } }
+    const next = await runTurn({ message: 'More ideas', state, model: scripted([reply([call('present_gifts', { cards: [card('BOOK', 'A copy of Fallen Angel')] })])]),
+      tools: qlooTools(), ctx: qloo().ctx, budget: budget(), products: { search: async () => ({ ok: true, cached: false, products: [book] }) }, emit: (event) => { events.push(event) } })
+    expect(next.cards[0].product?.id).toBe(book.id)
+    expect(events.find((event) => event.t === 'result' && event.tool === 'search_products')).toMatchObject({ text: 'Product found: exact title, a book.' })
+  })
+  it('refuses the study guide and ranks the real book first', () => {
+    const real = item('Fallen Angel (Paperback)', 24)
+    const products = [item('Fallen Angel study guide', 5), item('Fallen Angel illustrated', 10), real]
+    expect(pickProduct({ ok: true, cached: false, products }, 'Fallen Angel', 'book', 40)).toEqual({ product: real, match: 'exact title' })
+  })
+  it.each(['summary', 'analysis', 'workbook', 'notes', 'quiz', 'companion', 'review', 'unofficial', 'sparknotes', 'cliffsnotes', 'guide to', 'inspired by'])('refuses %s', (words) => {
+    expect(pickProduct({ ok: true, cached: false, products: [item(`Fallen Angel ${words}`)] }, 'Fallen Angel', 'book', 40)).toBeUndefined()
+  })
+  it('breaks equal ranks by price and keeps whole words', () => {
+    const cheapest = item('Fallen Angel, Second Edition', 12)
+    expect(pickProduct({ ok: true, cached: false, products: [item('Fallen Angel', 20), cheapest] }, 'Fallen Angel', 'book', 40)).toEqual({ product: cheapest, match: 'exact title' })
+    expect(pickProduct({ ok: true, cached: false, products: [item('Fallen Angelic')] }, 'Fallen Angel', 'book', 40)).toBeUndefined()
+  })
+})
+
+
+it('uses a brand match only for brands and reports a title word match', () => {
+  const item = { id: 'p', title: 'The collected stories', brand: 'Fender', price: 20, currency: 'USD', url: 'https://shop.test/item' }
+  expect(pickProduct({ ok: true, cached: false, products: [item] }, 'Fender', 'brand', 40)).toEqual({ product: item, match: 'brand is the name' })
+  expect(pickProduct({ ok: true, cached: false, products: [item] }, 'Fender', 'book', 40)).toBeUndefined()
+  const book = { ...item, title: 'The illustrated Fallen Angel' }
+  expect(pickProduct({ ok: true, cached: false, products: [book] }, 'Fallen Angel', 'book', 40)).toBeUndefined()
+})
+
+
+it('accepts large print book editions and checks whole category words', () => {
+  const item = { id: 'p', title: 'Fallen Angel (Large Print)', price: 20, currency: 'USD', url: 'https://shop.test/book' }
+  const pick = (product: typeof item & { category?: { slug: string; title: string; path: string[] } }) => pickProduct({ ok: true, cached: false, products: [product] }, 'Fallen Angel', 'book', 40)
+  expect(pick(item)).toMatchObject({ match: 'exact title' })
+  expect(pick({ ...item, title: 'Fallen Angel', category: { slug: 'notebooks', title: 'Notebooks', path: ['Stationery'] } })).toBeUndefined()
+  expect(pick({ ...item, category: { slug: 'fiction-books', title: 'Fiction', path: [] } })).toMatchObject({ kind: 'book' })
 })

@@ -1,6 +1,6 @@
 // The Gift Scout page: sends a message, reads the agent's events as they stream (NDJSON, see src/agent/events.ts), and
 // draws the chat on the left and every Qloo call on the right. A conversation keeps its panel across turns.
-import { cardHtml, callRowHtml, compareHtml, escapeHtml, orderRowHtml, paidRowHtml, panelSummary, walkSvg } from './render.js';
+import { cardHtml, callRowHtml, compareHtml, escapeHtml, orderBlockHtml, orderRowHtml, offerMessage, payCopy, quoteFor, paidRowHtml, panelSummary, refundFailedRowHtml, refundPendingRowHtml, refundRowHtml, shippedRowHtml, shippingProblem, plainLabels, walkSvg } from './render.js';
 
 const $ = (selector) => document.querySelector(selector);
 const chat = $('#chat-log');
@@ -44,6 +44,18 @@ const NARROW_EXAMPLE = 'Make it cheaper, under 30 dollars.';
 
 let conversation = null;
 let busy = false;
+let leavingForPayPal = false;
+let restorePayPalButton = null;
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted || !leavingForPayPal) return;
+  leavingForPayPal = false;
+  busy = false;
+  restorePayPalButton?.();
+  restorePayPalButton = null;
+  chat.querySelectorAll('.buy-button').forEach((button) => { button.disabled = false; });
+});
+const orders = new Map();
+const cards = new Map();
 let firstCardsReady = false;
 let firstCardList = null;
 let comparisonExists = false;
@@ -130,13 +142,16 @@ function drawCards(event) {
   walkPanel.hidden = !svg;
   chat.querySelectorAll('.card-list').forEach((list) => list.classList.add('earlier'));
   chat.querySelectorAll('.card-actions').forEach((el) => el.remove());
+  cards.clear();
   const wrap = document.createElement('div');
   wrap.className = 'card-list';
   if (!firstCardsReady) firstCardList = wrap;
   event.cards.forEach((card, i) => {
+    cards.set(card.id, structuredClone(card));
     const holder = document.createElement('div');
     holder.innerHTML = cardHtml(card, { buyable: canBuy && Boolean(ownerFor(conversation)) });
     const el = holder.firstElementChild;
+    el.dataset.cardId = card.id;
     el.style.setProperty('--index', i);
     wrap.append(el);
   });
@@ -218,10 +233,69 @@ function drawShare(share, { inChat = false } = {}) {
   }
 }
 
+function finishCard(card, text) {
+  const escaped = CSS.escape(card);
+  chat.querySelectorAll(`[data-pay][data-card="${escaped}"], [data-buy="${escaped}"], [data-resume="${escaped}"]`).forEach((button) => {
+    const actions = button.closest('.card-actions');
+    if (!actions) return;
+    const note = document.createElement('p');
+    note.className = 'pay-note paid-note';
+    note.dataset.paidCard = card;
+    note.textContent = text;
+    actions.replaceWith(note);
+  });
+  chat.querySelectorAll(`[data-paid-card="${escaped}"]`).forEach((note) => { note.textContent = text; });
+}
+
+function updateOrder(event) {
+  const card = event.card || [...orders.keys()].at(-1);
+  if (!card) return;
+  let order = orders.get(card);
+  if (!order && event.t === 'paid') {
+    const block = document.createElement('section');
+    block.className = 'order-block';
+    block.setAttribute('role', 'status');
+    block.dataset.orderCard = card;
+    const body = document.createElement('div');
+    body.className = 'order-body';
+    block.append(body);
+    if (conversation && ownerFor(conversation)) {
+      const actions = document.createElement('div');
+      actions.className = 'order-actions';
+      const refund = document.createElement('button');
+      refund.type = 'button';
+      refund.className = 'buy-button quiet refund-button';
+      refund.dataset.refund = card;
+      refund.textContent = 'Changed my mind';
+      actions.append(refund);
+      block.append(actions);
+    }
+    order = { block, body, gift: event.gift, amount: event.amount };
+    orders.set(card, order);
+    chat.append(block);
+  }
+  if (!order) return;
+  order.status = event.t === 'refund_failed' ? (order.tracker ? 'shipped' : 'paid') : event.t;
+  if (event.t === 'shipped') {
+    order.shipTo = event.ship_to;
+    order.tracker = event.tracking_number;
+  }
+  if (event.t === 'refunded') order.block.querySelector('.order-actions')?.remove();
+  const refund = order.block.querySelector('[data-refund]');
+  if (refund) {
+    refund.textContent = order.status === 'refund_pending' ? 'Check refund' : 'Changed my mind';
+    refund.disabled = false;
+  }
+  order.body.innerHTML = orderBlockHtml(order);
+  if (['paid', 'refunded', 'refund_pending', 'refund_failed'].includes(event.t)) finishCard(card, event.t === 'refund_pending' ? 'Refund pending' : event.t === 'refunded' ? 'Refunded' : 'Paid');
+  scrollChat();
+}
+
 function handleEvent(event, { live = true } = {}) {
   switch (event.t) {
     case 'run':
       if (event.turn === 1 && !['buy', 'compare'].includes(event.purpose)) {
+        orders.clear();
         resetPanel();
         firstCardsReady = false;
         firstCardList = null;
@@ -237,6 +311,7 @@ function handleEvent(event, { live = true } = {}) {
     case 'owner':
       if (conversation && typeof event.token === 'string') {
         try { sessionStorage.setItem(`gift-scout-owner:${conversation}`, event.token); } catch {}
+        canBuy = true;
       }
       drawCompareButton();
       break;
@@ -245,6 +320,7 @@ function handleEvent(event, { live = true } = {}) {
       holder.innerHTML = orderRowHtml(event);
       callsList.append(holder.firstElementChild);
       if (live && event.approve_url) {
+        leavingForPayPal = true;
         addLine('say-line', `Taking you to PayPal (sandbox) to approve $${event.amount}.`);
         setTimeout(() => location.assign(event.approve_url), 900);
       }
@@ -254,7 +330,46 @@ function handleEvent(event, { live = true } = {}) {
       const holder = document.createElement('div');
       holder.innerHTML = paidRowHtml(event);
       callsList.append(holder.firstElementChild);
-      addLine('say-line', `Paid in the PayPal sandbox: $${event.amount} for ${event.gift}.`);
+      updateOrder(event);
+      break;
+    }
+    case 'shipped': {
+      const holder = document.createElement('div');
+      holder.innerHTML = shippedRowHtml(event);
+      callsList.append(holder.firstElementChild);
+      updateOrder(event);
+      break;
+    }
+    case 'refund_pending':
+    case 'refund_failed':
+    case 'refunded': {
+      const holder = document.createElement('div');
+      holder.innerHTML = event.t === 'refund_pending' ? refundPendingRowHtml(event) : event.t === 'refund_failed' ? refundFailedRowHtml(event) : refundRowHtml(event);
+      callsList.append(holder.firstElementChild);
+      updateOrder(event);
+      break;
+    }
+    case 'offer_changed':
+    case 'offer_gone': {
+      const card = cards.get(event.card);
+      if (card) {
+        if (event.t === 'offer_changed' && card.product) {
+          card.product = event.product ? structuredClone(event.product) : { ...card.product, price: event.new_price, title: event.new_title ?? event.title };
+        } else if (event.t === 'offer_gone') delete card.product;
+        const product = chat.querySelector(`.gift-card[data-card-id="${CSS.escape(event.card)}"]`);
+        if (event.t === 'offer_gone') product?.querySelector('.product-block')?.remove();
+        else {
+          const template = document.createElement('template');
+          template.innerHTML = cardHtml(card);
+          const block = template.content.querySelector('.product-block');
+          if (block) product?.querySelector('.product-block')?.replaceWith(block);
+        }
+        const copy = payCopy(card);
+        product?.querySelectorAll('[data-pay]').forEach(control => { control.textContent = copy[control.dataset.pay]; });
+        const note = product?.querySelector('.pay-note');
+        if (note) note.textContent = copy.note;
+      }
+      addLine('say-line', offerMessage(event));
       break;
     }
     case 'say':
@@ -277,11 +392,34 @@ function handleEvent(event, { live = true } = {}) {
       drawCall(event.n);
       break;
     }
+    case 'cards_withdrawn': {
+      for (const id of event.cards) {
+        cards.delete(id);
+        const card = chat.querySelector(`[data-card-id="${CSS.escape(id)}"]`);
+        if (!card) continue;
+        card.classList.add('withdrawn');
+        card.querySelectorAll('.card-actions, .ship-form').forEach((el) => el.remove());
+        if (!card.querySelector('.withdrawn-note')) {
+          const note = document.createElement('p');
+          note.className = 'withdrawn-note';
+          note.textContent = 'Taken back';
+          card.append(note);
+        }
+      }
+      const svg = walkSvg([...cards.values()]);
+      walkPanel.innerHTML = svg;
+      walkPanel.hidden = !svg;
+      break;
+    }
     case 'cards':
       if (event.cards.length) drawCards(event);
       else {
+        chat.querySelectorAll('.card-list').forEach((list) => list.classList.add('earlier'));
+        chat.querySelectorAll('.card-actions').forEach((el) => el.remove());
+        cards.clear();
         walkPanel.replaceChildren();
         walkPanel.hidden = true;
+        addLine('say-line', 'No new ideas this time. Ask again with other things they love.');
       }
       break;
     case 'compare':
@@ -321,7 +459,7 @@ async function submitMessage(message) {
     const response = await fetch('/api/scout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, ...(conversation ? { conversation } : {}) }),
+      body: JSON.stringify({ message: text, ...(conversation && ownerFor(conversation) ? { conversation, owner: ownerFor(conversation) } : {}) }),
     });
     if (!response.ok || !response.body) {
       const why = await response.json().catch(() => ({}));
@@ -337,29 +475,102 @@ async function submitMessage(message) {
   }
 }
 
-async function buyCard(cardId, method) {
+/** The ship to fields under a card's pay buttons, or an error line naming what is missing. */
+function readShipping(actions) {
+  const form = actions?.querySelector('.ship-form');
+  if (!form) return { ship: undefined };
+  const value = (name) => form.querySelector(`[name="${name}"]`).value.trim();
+  const ship = { name: value('ship-name'), line1: value('ship-line1'), city: value('ship-city'), state: value('ship-state').toUpperCase(), postal: value('ship-postal') };
+  return { ship, error: shippingProblem(ship) };
+}
+
+function clearFieldError(input) {
+  input.removeAttribute('aria-invalid');
+  input.closest('.ship-field')?.querySelector('.field-error')?.remove();
+}
+
+async function buyCard(cardId, method, actions, button) {
   if (busy || !conversation) return;
+  actions?.querySelectorAll('.ship-form input').forEach(clearFieldError);
+  const { ship, error } = readShipping(actions);
+  if (error) {
+    const input = actions.querySelector(`[name="${CSS.escape(error.field)}"]`);
+    input.setAttribute('aria-invalid', 'true');
+    const line = document.createElement('p');
+    line.className = 'error-line field-error';
+    line.setAttribute('role', 'alert');
+    line.textContent = error.text;
+    input.closest('.ship-field').append(line);
+    input.focus();
+    return;
+  }
+  const card = cards.get(cardId);
+  if (!card) return;
+  const payment = card.product
+    ? { offer: { id: card.product.id, price: card.product.price, title: card.product.title, url: card.product.url } }
+    : { quote: quoteFor(card) };
   busy = true;
+  const words = button.textContent;
+  if (method === 'paypal') restorePayPalButton = () => {
+    button.textContent = words;
+    button.removeAttribute('aria-busy');
+  };
+  button.textContent = button.dataset.resume ? 'Checking payment' : method === 'card' ? 'Paying' : 'Going to PayPal';
+  button.setAttribute('aria-busy', 'true');
   chat.querySelectorAll('.buy-button').forEach((b) => { b.disabled = true; });
   try {
     const response = await fetch('/api/buy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversation, card: cardId, method, owner: ownerFor(conversation) }),
+      body: JSON.stringify({ ...payment, conversation, card: cardId, method, owner: ownerFor(conversation), ...(ship ? { ship } : {}) }),
     });
-    if (!response.ok || !response.body) throw new Error('The purchase could not start. Nothing was charged.');
+    if (!response.ok || !response.body) throw new Error('We could not confirm the payment. Tap Pay again to check, or check PayPal.');
     await readEvents(response);
   } catch (error) {
-    addLine('error-line', error instanceof Error ? error.message : 'The purchase could not start. Nothing was charged.');
+    addLine('error-line', 'We could not confirm the payment. Tap Pay again to check, or check PayPal.');
   } finally {
+    if (!leavingForPayPal) {
+      busy = false;
+      button.textContent = button.dataset.resume ? words : cards.has(cardId) ? payCopy(cards.get(cardId))[method] : words;
+      button.removeAttribute('aria-busy');
+      chat.querySelectorAll('.buy-button').forEach((b) => { b.disabled = false; });
+    }
+  }
+}
+
+/** "Changed my mind": a full refund of the paid gift. No model call; only the tab that bought it can ask. */
+async function refundCard(button) {
+  if (busy || !conversation) return;
+  busy = true;
+  button.disabled = true;
+  const previousText = button.textContent;
+  button.textContent = previousText === 'Check refund' ? 'Checking refund' : 'Refunding';
+  try {
+    const response = await fetch('/api/refund', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation, card: button.dataset.refund, owner: ownerFor(conversation) }),
+    });
+    const out = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(out.error || 'PayPal did not answer. Tap again to check; it will not refund twice.');
+    if (out.event) handleEvent(out.event);
+    if (out.error) addLine('error-line', out.error);
+    if (!out.event && response.status !== 202) throw new Error('PayPal did not confirm the refund. Check PayPal.');
+  } catch (error) {
+    addLine('error-line', error instanceof Error ? error.message : 'PayPal did not answer. Tap again to check; it will not refund twice.');
+    button.disabled = false;
+    button.textContent = previousText;
+  } finally {
+    button.disabled = false;
+    if (button.textContent === 'Checking refund' || button.textContent === 'Refunding') button.textContent = previousText;
     busy = false;
-    chat.querySelectorAll('.buy-button').forEach((b) => { b.disabled = false; });
   }
 }
 
 async function compareWithQlooOff(button) {
   if (busy || !conversation || !ownerFor(conversation) || comparisonExists) return;
   busy = true;
+  const previousText = button.textContent;
   button.disabled = true;
   button.textContent = 'Comparing';
   try {
@@ -373,6 +584,10 @@ async function compareWithQlooOff(button) {
       throw new Error(why.error || (response.status === 403 ? 'Only the conversation owner can compare.' : 'The comparison could not start.'));
     }
     await readEvents(response);
+    if (!comparisonExists) {
+      button.disabled = false;
+      button.textContent = previousText;
+    }
   } catch (error) {
     addLine('error-line', error instanceof Error ? error.message : 'The comparison could not start.');
     button.disabled = false;
@@ -385,13 +600,21 @@ async function compareWithQlooOff(button) {
 /** The tap on "Buy this one" opens the two ways to pay; nothing is bought until one is chosen. */
 function showPayChoice(button) {
   const card = button.dataset.buy;
-  const productTitle = button.closest('.gift-card').querySelector('.product-title')?.textContent;
+  const copy = payCopy(cards.get(card));
   const actions = button.closest('.card-actions');
   actions.classList.add('pay-choice');
+  // A made up address fills the form so a judge can pay in one tap. Only the city and state are kept after the order.
   actions.innerHTML = '<p class="pay-note">PayPal sandbox, no real money.</p>'
-    + `<button type="button" class="buy-button" data-pay="paypal" data-card="${escapeHtml(card)}">Pay at PayPal</button>`
-    + `<button type="button" class="buy-button quiet" data-pay="card" data-card="${escapeHtml(card)}">Pay with the test card</button>`;
-  if (productTitle) actions.querySelector('.pay-note').textContent = `Paying for ${productTitle}. PayPal sandbox, no real money.`;
+    + '<fieldset class="ship-form"><legend>Ship to (any US address works in the sandbox)</legend>'
+    + '<label class="ship-field ship-field-name"><span>Name</span><input name="ship-name" value="Sam Rivera" maxlength="60" autocomplete="off"></label>'
+    + '<label class="ship-field ship-field-line1"><span>Street</span><input name="ship-line1" value="1 Main St" maxlength="100" autocomplete="off"></label>'
+    + '<label class="ship-field ship-field-city"><span>City</span><input name="ship-city" value="San Jose" maxlength="60" autocomplete="off"></label>'
+    + '<label class="ship-field ship-field-state"><span>State</span><input name="ship-state" value="CA" maxlength="2" autocomplete="off"></label>'
+    + '<label class="ship-field ship-field-postal"><span>ZIP code</span><input name="ship-postal" value="95131" maxlength="5" inputmode="numeric" autocomplete="off"></label>'
+    + '</fieldset>'
+    + `<button type="button" class="buy-button" data-pay="paypal" data-card="${escapeHtml(card)}">${escapeHtml(copy.paypal)}</button>`
+    + `<button type="button" class="buy-button quiet" data-pay="card" data-card="${escapeHtml(card)}">${escapeHtml(copy.card)}</button>`;
+  actions.querySelector('.pay-note').textContent = copy.note;
   const firstPayButton = actions.querySelector('[data-pay="paypal"]');
   if (firstPayButton) {
     firstPayButton.focus();
@@ -419,6 +642,33 @@ async function readEvents(response) {
   }
 }
 
+function drawPaymentRecovery(turns) {
+  if (!conversation || !ownerFor(conversation)) return;
+  const pending = new Map();
+  const confirmed = new Set();
+  for (const event of turns.flat()) {
+    if (event.t === 'order') pending.set(event.card, event);
+    if (['paid', 'shipped', 'refund_pending', 'refund_failed', 'refunded'].includes(event.t)) confirmed.add(event.card);
+  }
+  for (const event of pending.values()) {
+    if (!cards.has(event.card) || confirmed.has(event.card)) continue;
+    const actions = document.createElement('div');
+    actions.className = 'card-actions payment-recovery';
+    const note = document.createElement('p');
+    note.className = 'pay-note';
+    note.textContent = `Payment for ${event.gift} is not confirmed. Check the existing order.`;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'buy-button';
+    button.dataset.resume = event.card;
+    button.dataset.method = event.method === 'card' ? 'card' : 'paypal';
+    button.textContent = event.approve_url ? 'Resume payment' : 'Check payment';
+    actions.append(note);
+    actions.append(button);
+    chat.append(actions);
+  }
+}
+
 async function loadShare(id) {
   canBuy = false;
   empty.hidden = true;
@@ -434,6 +684,7 @@ async function loadShare(id) {
         handleEvent(event, { live: false });
       }
     }
+    drawPaymentRecovery(turns || []);
     const again = document.createElement('a');
     again.className = 'share-button start-own';
     again.href = '/';
@@ -463,14 +714,21 @@ examples.addEventListener('click', (e) => {
   if (chip) submitMessage(chip.dataset.example);
 });
 chat.addEventListener('click', (e) => {
+  const resume = e.target.closest('[data-resume]');
+  if (resume) { buyCard(resume.dataset.resume, resume.dataset.method, null, resume); return; }
   const compare = e.target.closest('[data-compare]');
   if (compare) { compareWithQlooOff(compare); return; }
   const pay = e.target.closest('[data-pay]');
-  if (pay) { buyCard(pay.dataset.card, pay.dataset.pay); return; }
+  if (pay) { buyCard(pay.dataset.card, pay.dataset.pay, pay.closest('.card-actions'), pay); return; }
+  const refund = e.target.closest('[data-refund]');
+  if (refund) { refundCard(refund); return; }
   const buy = e.target.closest('[data-buy]');
   if (buy) { showPayChoice(buy); return; }
   const link = e.target.closest('[data-call]');
   if (link) { e.preventDefault(); openPanel(link.dataset.call); }
+});
+chat.addEventListener('input', (event) => {
+  if (event.target.matches('.ship-form input')) clearFieldError(event.target);
 });
 const panelTrigger = $('#panel-trigger');
 const sheetClose = $('#sheet-close');
@@ -512,10 +770,33 @@ sheetClose.addEventListener('click', () => {
   panelTrigger.focus();
 });
 
+/** Rewrites every text node and label that names Qloo, now and whenever the page changes. */
+function usePlainLabels() {
+  const relabel = () => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.nodeValue.includes('Qloo')) node.nodeValue = plainLabels(node.nodeValue);
+    }
+    for (const element of document.body.querySelectorAll('[aria-label*="Qloo"], [title*="Qloo"]')) {
+      for (const name of ['aria-label', 'title']) {
+        const value = element.getAttribute(name);
+        if (value?.includes('Qloo')) element.setAttribute(name, plainLabels(value));
+      }
+    }
+  };
+  relabel();
+  new MutationObserver(relabel).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'title'] });
+}
+
 fetch('/api/examples')
   .then((r) => (r.ok ? r.json() : Promise.reject(new Error('no examples'))))
   .then((data) => {
-    examples.innerHTML = (data.examples || []).slice(0, 3)
+    if (data.plain_labels) usePlainLabels();
+    // With the live taste graph down (no key, a refused key, or Qloo's month spent), only the recorded examples run.
+    const off = data.live === false
+      ? '<p class="graph-off" role="status">The live taste graph is not available right now. These three examples still work from their recorded runs.</p>'
+      : '';
+    examples.innerHTML = off + (data.examples || []).slice(0, 3)
       .map((text) => `<button type="button" class="example-chip" data-example="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join('');
   })
   .catch(() => {});

@@ -76,7 +76,7 @@ function restaurantTag(tags: Found[]): string | undefined {
 export interface Carried { text: string; unknown: string[]; known: string[]; outage: boolean }
 
 /** Runs the plan's Qloo calls through `run` (each one shows in the panel). */
-export async function carryOut(plan: Plan, said: string[], run: RunTool): Promise<Carried> {
+export async function carryOut(plan: Plan, said: string[], run: RunTool, onSeed?: (id: string, interest: string) => void): Promise<Carried> {
   const loves = plan.loves.slice(0, 5).filter((love) => saidIn(love.name, said) || wordSaidIn(love.name, said))
   const queries = loves.map((love) => love.name)
   const found = await Promise.all(loves.map(async (love, i) => {
@@ -114,9 +114,15 @@ export async function carryOut(plan: Plan, said: string[], run: RunTool): Promis
     known.push(top[0].type === 'tag' ? love.name : top[0].name)
     if (top[0].type === 'tag') {
       const tag = love.kind === 'cuisine' ? restaurantTag(top) : top[0].id
-      if (tag && !seedTags.includes(tag)) seedTags.push(tag)
+      if (tag) {
+        if (!seedTags.includes(tag)) seedTags.push(tag)
+        onSeed?.(tag, love.name)
+      }
       if (love.kind === 'cuisine' && !cuisine) cuisine = tag
-    } else if (!seedIds.includes(top[0].id)) seedIds.push(top[0].id)
+    } else {
+      if (!seedIds.includes(top[0].id)) seedIds.push(top[0].id)
+      onSeed?.(top[0].id, love.name)
+    }
   })
   if (!seedIds.length && !seedTags.length) return { text: '', unknown, known, outage: false }
 

@@ -26,11 +26,24 @@ def d1(sql: str) -> list:
     return json.loads(out.stdout)[0]['results']
 
 
-def scout(message: str, conversation: str | None = None) -> list:
-    body = {'message': message, **({'conversation': conversation} if conversation else {})}
+def scout(message: str, conversation: str | None = None, owner: str | None = None) -> list:
+    body = {'message': message, **({'conversation': conversation} if conversation else {}), **({'owner': owner} if owner else {})}
     req = urllib.request.Request(BASE + '/api/scout', data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=180) as r:
         return [json.loads(line) for line in r if line.strip()]
+
+
+def owner_of(events: list) -> str:
+    token = next((event.get('token') for event in events if event.get('t') == 'owner' and event.get('token')), None)
+    if not token:
+        raise RuntimeError('the Worker did not send an owner token for this conversation')
+    return token
+
+
+def check_stream(events: list) -> None:
+    error = next((event.get('text', 'Unknown error') for event in events if event.get('t') == 'error'), None)
+    if error is not None:
+        raise RuntimeError('the Worker said: ' + str(error))
 
 
 def trim(body: dict) -> dict:
@@ -76,10 +89,13 @@ def main() -> None:
     runs = []
     for prompt in examples:
         first = scout(prompt)
+        check_stream(first)
         cid = first[0]['conversation']
+        owner = owner_of(first)
         assert first[0]['mode'] == 'live', first[0]
         assert any(e['t'] == 'cards' and e['cards'] for e in first), 'no cards for: ' + prompt
-        second = scout(NARROW, cid)
+        second = scout(NARROW, cid, owner)
+        check_stream(second)
         assert second[0]['mode'] == 'live', second[0]
         row = d1(f"SELECT state, turns FROM conversations WHERE id = 'first-{cid}' OR id = '{cid}' ORDER BY length(id) DESC")
         snap, full = json.loads(row[0]['state']), json.loads(row[1]['state'])

@@ -19,6 +19,11 @@ export interface Found {
 
 /** A real item found for this card by Channel3. */
 export interface CardProduct {
+  id?: string
+  currency?: string
+  availability?: 'InStock' | 'OutOfStock'
+  condition?: 'new' | 'used'
+  match?: 'exact title' | 'title starts with the name' | 'brand is the name' | 'title names it'
   title: string
   brand?: string
   price: number
@@ -54,6 +59,8 @@ export interface Card {
 export interface Dropped { gift: string; reason: string }
 
 export type ScoutEvent =
+  | { t: 'offer_changed'; card: string; title: string; old_price: number; new_price: number; changes?: ('price' | 'title' | 'shop' | 'offer')[]; old_title?: string; new_title?: string; shop?: string; product?: CardProduct }
+  | { t: 'offer_gone'; card: string; title: string; reason?: 'over_budget'; new_price?: number }
   | { t: 'owner'; token: string }
   /** `off`: live scouting cannot run now and there is no recording for this message; an `error` follows. */
   | { t: 'run'; conversation: string; turn: number; mode: 'live' | 'cache' | 'replay' | 'off'; recorded_at?: string; said?: string; purpose?: 'buy' | 'compare' }
@@ -63,12 +70,18 @@ export type ScoutEvent =
   /** The answer to call `n`. `top` holds at most 8 entities or tags; `cached` means Qloo was not asked again. */
   | { t: 'result'; n: number; tool: string; ok: boolean; ms: number; cached: boolean; text: string; top: Found[] }
   | { t: 'cards'; cards: Card[]; dropped: Dropped[] }
+  | { t: 'cards_withdrawn'; cards: string[]; names: string[] }
   /** The plain model picks and their Qloo scores against the conversation seeds. */
-  | { t: 'compare'; plain: { gift: string; name: string; kind: string; found: boolean; affinity?: number }[]; plain_mean: number | null; qloo_mean: number | null; not_found: number }
+  | { t: 'compare'; plain: { gift: string; name: string; kind: string; found: boolean; affinity?: number; matched?: { id: string; name: string; type: string }; context?: 'same' | 'nearest' }[]; plain_mean: number | null; qloo_mean: number | null; not_found: number; coverage?: { plain_found: number; plain_total: number; cards_scored: number; cards_total: number } }
   | { t: 'usage'; model_calls: number; neurons: number }
   | { t: 'error'; text: string }
   /** A PayPal sandbox order made by buy_gift, for the buyer to approve at `approve_url`. */
   | { t: 'order'; card: string; gift: string; order_id: string; amount: string; approve_url?: string; method?: 'paypal' | 'card'; product_title?: string; product_url?: string }
   /** The order was approved and captured. */
   | { t: 'paid'; card: string; gift: string; order_id: string; capture_id: string; amount: string; at: string; product_title?: string; product_url?: string }
+  /** A PayPal tracker was added to the capture. `ship_to` is the city and state only: a share link never shows the street. */
+  | { t: 'shipped'; card: string; order_id: string; capture_id: string; tracker_id: string; tracking_number: string; ship_to?: string; at: string }
+  /** The buyer changed their mind and the capture was refunded in full. */
+  | { t: 'refunded'; card: string; gift: string; order_id: string; capture_id: string; refund_id: string; amount: string; at: string }
+  | { t: 'refund_pending' | 'refund_failed'; card: string; gift: string; order_id: string; capture_id: string; refund_id: string; amount: string; at: string }
   | { t: 'done'; share: string }

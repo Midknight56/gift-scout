@@ -22,19 +22,31 @@ NARROW = 'Make it cheaper, under 30 dollars.'
 HEADERS = {'Content-Type': 'application/json', 'User-Agent': 'gift-scout-demo-check/1.0'}
 
 
-def scout(message: str, conversation: str | None = None) -> list:
-    body = {'message': message, **({'conversation': conversation} if conversation else {})}
+def scout(message: str, conversation: str | None = None, owner: str | None = None) -> list:
+    body = {'message': message, **({'conversation': conversation} if conversation else {}), **({'owner': owner} if owner else {})}
     req = urllib.request.Request(BASE + '/api/scout', data=json.dumps(body).encode(), headers=HEADERS)
     with urllib.request.urlopen(req, timeout=240) as r:
         return [json.loads(line) for line in r if line.strip()]
+
+
+def owner_of(events: list) -> str:
+    token = next((event.get('token') for event in events if event.get('t') == 'owner' and event.get('token')), None)
+    if not token:
+        raise RuntimeError('the Worker did not send an owner token for this conversation')
+    return token
+
+
+def stream_error(events: list) -> str | None:
+    error = next((event.get('text', 'Unknown error') for event in events if event.get('t') == 'error'), None)
+    return 'the Worker said: ' + str(error) if error is not None else None
 
 
 def judge(first: list, second: list) -> list[str]:
     faults = []
     calls = [e for e in first if e['t'] == 'call']
     cards = next((e['cards'] for e in first if e['t'] == 'cards' and e['cards']), [])
-    if any(e['t'] == 'error' for e in first):
-        faults.append('error: ' + next(e['text'] for e in first if e['t'] == 'error'))
+    if stream_error(first):
+        faults.append(stream_error(first))
     if len(calls) < 5:
         faults.append(f'{len(calls)} Qloo calls')
     if len(cards) < 5:
@@ -43,7 +55,9 @@ def judge(first: list, second: list) -> list[str]:
         faults.append('fewer than three kinds')
     if any(c['entity'].get('affinity') is None or not c['from_call'] for c in cards):
         faults.append('a card with no affinity')
-    if any(e['t'] == 'error' for e in second) or not any(e['t'] == 'cards' and e['cards'] for e in second):
+    if stream_error(second):
+        faults.append(stream_error(second))
+    elif not any(e['t'] == 'cards' and e['cards'] for e in second):
         faults.append('the narrowing turn failed')
     return faults
 
@@ -59,7 +73,13 @@ def main() -> None:
             t0 = time.time()
             first = scout(prompt)
             mid = time.time()
-            second = scout(NARROW, first[0]['conversation'])
+            first_error = stream_error(first)
+            if first_error:
+                failed += 1
+                print(f'round {rnd} run {i}: FAIL {first_error}')
+                continue
+            owner = owner_of(first)
+            second = scout(NARROW, first[0]['conversation'], owner)
             faults = judge(first, second)
             failed += bool(faults)
             usage = next((e for e in first if e['t'] == 'usage'), {})

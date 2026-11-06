@@ -9,6 +9,41 @@ function db(): FakeD1 { const value = new FakeD1(); databases.push(value); retur
 afterEach(() => { for (const value of databases.splice(0)) value.close() })
 
 describe('D1 storage', () => {
+  it('retries a changed row with fresh data and a strictly newer timestamp', async () => {
+    const database = db(), conversations = new Conversations(database, () => 123)
+    await conversations.put('race123', newState('race123'), [])
+    let changes = 0
+    await conversations.update('race123', (saved) => {
+      changes++
+      if (changes === 1) {
+        void database.prepare('UPDATE conversations SET turns = ?, updated_at = ? WHERE id = ?')
+          .bind(JSON.stringify([[{ t: 'say', text: 'other writer' }]]), 124, 'race123').run()
+      }
+      return { state: saved.state, turns: [...saved.turns, [{ t: 'say', text: 'mine' }]] }
+    })
+    expect(changes).toBe(2)
+    expect((await conversations.get('race123'))?.turns).toEqual([[{ t: 'say', text: 'other writer' }], [{ t: 'say', text: 'mine' }]])
+    expect(await database.prepare('SELECT updated_at FROM conversations WHERE id = ?').bind('race123').first()).toEqual({ updated_at: 125 })
+  })
+
+  it('stops after the requested tries and names the conversation', async () => {
+    const database = db(), conversations = new Conversations(database, () => 123)
+    await conversations.put('race123', newState('race123'), [])
+    let calls = 0
+    await expect(conversations.update('race123', (saved) => {
+      calls++
+      void database.prepare('UPDATE conversations SET updated_at = updated_at + 1 WHERE id = ?').bind('race123').run()
+      return saved
+    }, 2)).rejects.toThrow('race123')
+    expect(calls).toBe(2)
+  })
+
+  it('leaves a row untouched when the change returns null', async () => {
+    const database = db(), conversations = new Conversations(database, () => 123)
+    await conversations.put('same123', newState('same123'), [])
+    await conversations.update('same123', () => null)
+    expect(await database.prepare('SELECT updated_at FROM conversations WHERE id = ?').bind('same123').first()).toEqual({ updated_at: 123 })
+  })
   it('returns cached bodies until expiry', async () => {
     const database = db()
     let now = 1000

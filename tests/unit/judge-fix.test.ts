@@ -206,17 +206,28 @@ describe('album seed and named city regressions', () => {
     ['She lives in Toronto.', 'Toronto', true],
     ['He lives in New York.', 'New York', true],
     ['walks in the forest', 'forest', false],
-    ['she lives in toronto', 'toronto', false],
-  ])('uses city %s only when it is written as a name', async (message, city, shouldAskPlace) => {
+    ['she lives in toronto', 'toronto', true],
+  ])('uses city %s when named or explicitly stated', async (message, city, shouldAskPlace) => {
     const { asked } = await turn(message + ' Phoebe Bridgers is her favorite.', [{ name: 'Phoebe Bridgers', kind: 'named' }], undefined, city)
     expect(asked.some((url) => url.pathname === '/v2/insights' && url.searchParams.get('filter.type') === 'urn:entity:place')).toBe(shouldAskPlace)
   })
 
-  it('matches capitalized city names by whole words, ignoring case and accents for matching', () => {
+  it.each([
+    ['She lives in toronto.', 'Toronto'],
+    ['He lives in new york.', 'New York'],
+    ['She is based in montr\u00e9al.', 'Montr\u00e9al'],
+  ])('review 3: uses an explicitly stated lowercase city: %s', async (message, city) => {
+    const { asked } = await turn(message + ' Phoebe Bridgers is her favorite.', [{ name: 'Phoebe Bridgers', kind: 'named' }], undefined, city)
+    expect(asked.filter(url => url.pathname === '/v2/insights' && url.searchParams.get('filter.type') === 'urn:entity:place')).toHaveLength(1)
+  })
+  it.each(['walks in the forest', 'She likes toronto books', 'She lives in the forest', 'She does not live in toronto'])('review 3: rejects a non city or unstated location: %s', message => {
+    expect(nameSaidIn(message.includes('forest') ? 'forest' : 'Toronto', [message])).toBe(false)
+  })
+  it('matches named and explicit residence cities by whole words, ignoring case and accents', () => {
     expect(nameSaidIn('Toronto', ['She lives in Toronto.'])).toBe(true)
     expect(nameSaidIn('New York', ['He lives in New York.'])).toBe(true)
     expect(nameSaidIn('forest', ['walks in the forest'])).toBe(false)
-    expect(nameSaidIn('toronto', ['she lives in toronto'])).toBe(false)
+    expect(nameSaidIn('toronto', ['she lives in toronto'])).toBe(true)
   })
 })
 

@@ -1,7 +1,7 @@
 import type { Cache } from '../qloo/client'
 import type { Budget, ConversationState, Reservation } from '../agent/agent'
 import type { ScoutEvent } from '../agent/events'
-import { MAX_CALL_NEURONS } from '../limits'
+import { clock, MAX_CALL_NEURONS } from '../limits'
 
 interface Stmt {
   first<T>(): Promise<T | null>
@@ -11,7 +11,11 @@ interface Stmt {
 interface D1Like { prepare(sql: string): { bind(...v: unknown[]): Stmt } }
 
 interface CacheRow { body: string; expires_at: number }
-interface ConversationRow { state: string; turns: string }
+interface ConversationRow { state: string; turns: string; updated_at: number }
+export interface SavedConversation { state: ConversationState; turns: ScoutEvent[][] }
+
+/** The qloo_cache key that marks a Qloo key Qloo refused (401 or 403); see tasteGraphLive in src/worker.ts. */
+export const QLOO_REFUSED_KEY = 'status:qloo-refused'
 
 export class D1Cache implements Cache {
   constructor(private db: D1Like, private now: () => number = Date.now) {}
@@ -40,6 +44,20 @@ export class Conversations {
     await this.db.prepare('INSERT INTO conversations (id, state, turns, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state = excluded.state, turns = excluded.turns, updated_at = excluded.updated_at')
       .bind(id, JSON.stringify(state), JSON.stringify(turns), this.now()).run()
   }
+
+  /** The change may run again after a conflict. Keep external calls outside it. */
+  async update(id: string, change: (saved: SavedConversation) => SavedConversation | null, tries = 5): Promise<SavedConversation | null> {
+    for (let attempt = 0; attempt < tries; attempt++) {
+      const row = await this.db.prepare('SELECT state, turns, updated_at FROM conversations WHERE id = ?').bind(id).first<ConversationRow>()
+      if (!row) throw new Error(`Conversation ${id} was not found`)
+      const next = change({ state: JSON.parse(row.state) as ConversationState, turns: JSON.parse(row.turns) as ScoutEvent[][] })
+      if (!next) return null
+      const result = await this.db.prepare('UPDATE conversations SET state = ?, turns = ?, updated_at = ? WHERE id = ? AND updated_at = ?')
+        .bind(JSON.stringify(next.state), JSON.stringify(next.turns), Math.max(this.now(), row.updated_at + 1), id, row.updated_at).run()
+      if (result.meta.changes > 0) return next
+    }
+    throw new Error(`Conversation ${id} could not be updated after ${tries} tries`)
+  }
 }
 
 export class RunCache {
@@ -59,7 +77,7 @@ export class RunCache {
 export class NeuronLedger implements Budget {
   private day: () => string
   constructor(private db: D1Like, private opts: { app: string; dailyCap: number; accountCap: number; reserve?: number; day?: () => string }) {
-    this.day = opts.day ?? (() => new Date().toISOString().slice(0, 10))
+    this.day = opts.day ?? (() => new Date(clock.now()).toISOString().slice(0, 10))
   }
 
   async spentToday(): Promise<{ app: number; all: number }> {

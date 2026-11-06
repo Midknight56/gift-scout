@@ -8,7 +8,7 @@
 //   GET  /health                 ok
 import { DurableObject } from 'cloudflare:workers'
 import { WorkersAiModel, type AiBinding } from './agent/model'
-import { buyTurn, handleWebhook, ownerToken, paidReturn, parseBuy, tokenMatchesOwner } from './app/buy'
+import { buyTurn, handleWebhook, page, ownerToken, paidReturn, parseBuy, parseRefund, refundPurchase, tokenMatchesOwner } from './app/buy'
 import { compareTurn, parseCompare } from './app/compare'
 import { EXAMPLES, ndjsonResponse, parseScout, scoutTurn, type RecordedRun } from './app/scout'
 import { previewFor, sharePage } from './app/share'
@@ -18,14 +18,17 @@ import { QlooClient, type Cache } from './qloo/client'
 import { Channel3Client } from './channel3/client'
 import { channel3Enabled } from './channel3/flag'
 import { qlooTools, type QlooContext } from './qloo/tools'
-import { Conversations, D1Cache, NeuronLedger, RunCache } from './store/d1'
-import { REPLAY_PACE_MS, DAILY_BUYS_PER_VISITOR, DAILY_COMPARES_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DAILY_CHANNEL3_CALLS, DAILY_CHANNEL3_CALLS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DEFAULT_ACCOUNT_NEURONS, dailyNeuronShare, MAX_CALL_NEURONS, QLOO_MONTH_FLOOR, clock, perVisitor } from './limits'
+import { Conversations, D1Cache, NeuronLedger, QLOO_REFUSED_KEY, RunCache } from './store/d1'
+import { REPLAY_PACE_MS, DAILY_BUYS_PER_VISITOR, DAILY_COMPARES_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DAILY_CHANNEL3_CALLS, DAILY_CHANNEL3_CALLS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DEFAULT_ACCOUNT_NEURONS, dailyNeuronShare, MAX_CALL_NEURONS, QLOO_MONTH_FLOOR, clock, publicLimit, visitorLimit, JUDGE_RESERVE_NEURONS, JUDGE_RESERVE_QLOO, JUDGE_RESERVE_CHANNEL3, JUDGE_TURNS, JUDGE_BUYS, JUDGE_COMPARES } from './limits'
 
 export interface Env {
   /** Unset means no live Qloo: only cached and recorded answers. */
   QLOO_API_KEY?: string
   CHANNEL3_API_KEY?: string
   CHANNEL3?: string
+  JUDGE_PASS?: string
+  /** "on" makes the page say "the taste graph" in place of Qloo (public/render.js plainLabels). */
+  PLAIN_LABELS?: string
   SESSION_SECRET: string
   DB: D1Database
   /** The shared ledger of the hackathon apps' Workers AI use; this app's own DB when not bound. */
@@ -61,6 +64,22 @@ async function visitorOf(request: Request, salt: string): Promise<string> {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + ip))
   return [...new Uint8Array(digest).slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Compare fixed length digests so the loop never depends on the pass length or contents. */
+async function passMatches(candidate: string, expected: string): Promise<boolean> {
+  const hash = async (value: string) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+  const [a, b] = await Promise.all([hash(candidate), hash(expected)])
+  let difference = 0
+  for (let i = 0; i < a.length; i++) difference |= a[i] ^ b[i]
+  return difference === 0
+}
+
+async function isJudge(request: Request, env: Env): Promise<boolean> {
+  if (!env.JUDGE_PASS) return false
+  const cookies = (request.headers.get('Cookie') ?? '').split(';').map((part) => part.trim())
+  const cookie = cookies.find((part) => part.startsWith('gs_judge='))?.slice('gs_judge='.length)
+  return tokenMatchesOwner('judge-v1', cookie, env.SESSION_SECRET)
 }
 
 /** The D1 cache first, then the answers recorded for the examples, so the examples work with no key. */
@@ -106,15 +125,31 @@ async function qlooQuota(env: Env): Promise<number | null> {
   } catch { return null }
 }
 
-async function qlooFor(request: Request, env: Env, ctx?: ExecutionContext): Promise<QlooContext> {
+// A refused key is marked in qloo_cache under QLOO_REFUSED_KEY. The row expires by itself, so live is tried again after
+// the hold: one visitor's failed run every six hours at most, while the key stays refused.
+const QLOO_REFUSED_HOLD_SECONDS = 6 * 60 * 60
+
+async function qlooRefused(env: Env): Promise<boolean> {
+  try { return (await new D1Cache(env.DB).get(QLOO_REFUSED_KEY)) !== null } catch { return false }
+}
+
+/** Live scouting needs the model, a Qloo key Qloo still takes, and room in Qloo's month. */
+async function tasteGraphLive(env: Env): Promise<boolean> {
+  if (!env.AI || !env.QLOO_API_KEY) return false
+  const monthRemaining = await qlooQuota(env)
+  if (monthRemaining !== null && monthRemaining < QLOO_MONTH_FLOOR) return false
+  return !(await qlooRefused(env))
+}
+
+async function qlooFor(request: Request, env: Env, ctx?: ExecutionContext, judge = false): Promise<QlooContext> {
   const visitor = await visitorOf(request, env.SESSION_SECRET)
   // Keep this client's newest observation immediately, while the shared D1 upsert runs in the background.
   let observedRemaining = await qlooQuota(env)
   const allow = async () => {
     const remaining = observedRemaining ?? await qlooQuota(env)
     if (remaining !== null && remaining < QLOO_MONTH_FLOOR) return false
-    return (await counter(env, 'visitor:' + visitor).take(today(), perVisitor(DAILY_QLOO_CALLS_PER_VISITOR))) &&
-      (await counter(env, 'qloo-total').take(today(), DAILY_QLOO_CALLS))
+    return (await counter(env, 'visitor:' + visitor).take(today(), visitorLimit(DAILY_QLOO_CALLS_PER_VISITOR, judge))) &&
+      (await counter(env, 'qloo-total').take(today(), publicLimit(DAILY_QLOO_CALLS, JUDGE_RESERVE_QLOO, judge)))
   }
   const cache = new LayeredCache(new D1Cache(env.DB), env.RECORDING === '1' ? { get: async () => null, put: async () => {} } : new D1Samples(env.DB))
   const onQuota = (remaining: number, resetSeconds?: number) => {
@@ -125,17 +160,22 @@ async function qlooFor(request: Request, env: Env, ctx?: ExecutionContext): Prom
     if (ctx) ctx.waitUntil(update)
     else void update.catch(() => {})
   }
+  const onRefused = () => {
+    const mark = new D1Cache(env.DB).put(QLOO_REFUSED_KEY, new Date().toISOString(), { expirationTtl: QLOO_REFUSED_HOLD_SECONDS })
+    if (ctx) ctx.waitUntil(mark)
+    else void mark.catch(() => {})
+  }
   // fetch is wrapped: Workers throw "Illegal invocation" when the global fetch is called detached.
-  return { qloo: new QlooClient(env.QLOO_API_KEY ?? '', (input, init) => fetch(input, init), cache, allow, onQuota) }
+  return { qloo: new QlooClient(env.QLOO_API_KEY ?? '', (input, init) => fetch(input, init), cache, allow, onQuota, onRefused) }
 }
 
-function channel3For(request: Request, env: Env): Channel3Client | null {
+function channel3For(request: Request, env: Env, judge = false): Channel3Client | null {
   if (!channel3Enabled(env)) return null
   const visitorPromise = visitorOf(request, env.SESSION_SECRET)
   const allow = async () => {
     const visitor = await visitorPromise
-    return (await counter(env, 'channel3:' + visitor).take(today(), perVisitor(DAILY_CHANNEL3_CALLS_PER_VISITOR))) &&
-      (await counter(env, 'channel3:all').take(today(), DAILY_CHANNEL3_CALLS))
+    return (await counter(env, 'channel3:' + visitor).take(today(), visitorLimit(DAILY_CHANNEL3_CALLS_PER_VISITOR, judge))) &&
+      (await counter(env, 'channel3:all').take(today(), publicLimit(DAILY_CHANNEL3_CALLS, JUDGE_RESERVE_CHANNEL3, judge)))
   }
   return new Channel3Client(env.CHANNEL3_API_KEY!, (input, init) => fetch(input, init), new D1Cache(env.DB), allow)
 }
@@ -145,10 +185,11 @@ function paypalFor(env: Env): PayPal | null {
   return new PayPal(env.PAYPAL_CLIENT_ID, env.PAYPAL_SECRET, (input, init) => fetch(input, init))
 }
 
-function ledgerFor(env: Env): NeuronLedger {
+function ledgerFor(env: Env, judge: boolean): NeuronLedger {
   return new NeuronLedger(env.LEDGER ?? env.DB, {
     app: 'gift-scout',
-    dailyCap: Number(env.DAILY_NEURONS ?? dailyNeuronShare()),
+    dailyCap: publicLimit(Number(env.DAILY_NEURONS ?? dailyNeuronShare()), JUDGE_RESERVE_NEURONS, judge),
+    day: today,
     accountCap: Number(env.ACCOUNT_NEURONS ?? DEFAULT_ACCOUNT_NEURONS),
     reserve: MAX_CALL_NEURONS,
   })
@@ -161,9 +202,23 @@ export default {
     const url = new URL(request.url)
     const path = url.pathname
 
+    if (path === '/judge') {
+      if (request.method !== 'GET') return new Response(null, { status: 405, headers: { Allow: 'GET' } })
+      if (!env.JUDGE_PASS) return page(404, 'Not found.')
+      const pass = url.searchParams.get('pass')
+      if (pass === null || !(await passMatches(pass, env.JUDGE_PASS))) return page(403, 'That pass is not right.')
+      const token = await ownerToken('judge-v1', env.SESSION_SECRET)
+      return new Response(null, { status: 303, headers: {
+        Location: '/', 'Cache-Control': 'no-store',
+        'Set-Cookie': `gs_judge=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`,
+      } })
+    }
+    const judge = await isJudge(request, env)
+
     if (path === '/health') return new Response('ok')
 
-    if (path === '/api/examples') return json({ examples: EXAMPLES })
+    // `live` lets the page say up front that only the recorded examples run.
+    if (path === '/api/examples') return json({ examples: EXAMPLES, live: await tasteGraphLive(env), ...(env.PLAIN_LABELS === 'on' ? { plain_labels: true } : {}) })
 
     if (path.startsWith('/api/conversation/')) {
       const id = decodeURIComponent(path.slice('/api/conversation/'.length))
@@ -177,27 +232,27 @@ export default {
       if (origin && origin !== url.origin) return json({ error: 'Origin not allowed' }, 403)
       const parsed = await parseScout(request)
       if (!parsed.ok) return json({ error: parsed.text }, parsed.status)
-      const monthRemaining = await qlooQuota(env)
-      const monthlyLimitReached = monthRemaining !== null && monthRemaining < QLOO_MONTH_FLOOR
+      const live = await tasteGraphLive(env)
       const visitor = await visitorOf(request, env.SESSION_SECRET)
-      const budget = ledgerFor(env)
+      const budget = ledgerFor(env, judge)
       const stream = ndjsonResponse()
       const work = scoutTurn(parsed.message, parsed.conversation, {
         conversations: new Conversations(env.DB),
         runs: new RunCache(env.DB),
         recorded: () => recordedRunsFromD1(env.DB),
         tools: qlooTools(),
-        live: !monthlyLimitReached && env.QLOO_API_KEY && env.AI
+        live: live && env.AI
           ? {
-              model: new WorkersAiModel(env.AI), ctx: await qlooFor(request, env, ctx), budget,
-              takeVisitorTurn: () => counter(env, 'turns:' + visitor).take(today(), Number(env.TURNS_PER_VISITOR ?? perVisitor(DAILY_TURNS_PER_VISITOR))),
+              model: new WorkersAiModel(env.AI), ctx: await qlooFor(request, env, ctx, judge), budget,
+              takeVisitorTurn: () => counter(env, 'turns:' + visitor).take(today(), Number(env.TURNS_PER_VISITOR ?? visitorLimit(DAILY_TURNS_PER_VISITOR, judge, JUDGE_TURNS))),
             }
           : null,
-        products: channel3For(request, env) ?? undefined,
+        products: channel3For(request, env, judge) ?? undefined,
         newId,
         ownerToken: (id) => ownerToken(id, env.SESSION_SECRET),
+        isOwner: (id, token) => tokenMatchesOwner(id, token, env.SESSION_SECRET),
         paceMs: REPLAY_PACE_MS,
-      }, stream.send)
+      }, stream.send, parsed.owner)
         .catch(async () => { await stream.send({ t: 'error', text: 'Something broke on our side. Try again in a minute.' }) })
         .finally(() => stream.close())
       ctx.waitUntil(work)
@@ -216,16 +271,27 @@ export default {
       const work = buyTurn(parsed.conversation, parsed.card, {
         conversations: new Conversations(env.DB),
         paypal: paypalFor(env),
+        products: channel3For(request, env, judge),
         live: env.AI
-          ? { model: new WorkersAiModel(env.AI), budget: ledgerFor(env), takeVisitorBuy: () => counter(env, 'buys:' + visitor).take(today(), perVisitor(DAILY_BUYS_PER_VISITOR)) }
+          ? { model: new WorkersAiModel(env.AI), budget: ledgerFor(env, judge), takeVisitorBuy: () => counter(env, 'buys:' + visitor).take(today(), visitorLimit(DAILY_BUYS_PER_VISITOR, judge, JUDGE_BUYS)) }
           : null,
         origin: url.origin,
         ownerSecret: env.SESSION_SECRET,
-      }, stream.send, parsed.method, parsed.owner)
+      }, stream.send, parsed.method, parsed.owner, parsed.ship, parsed.offer, parsed.quote)
         .catch(async () => { await stream.send({ t: 'error', text: 'Something broke on our side. Check PayPal before trying again.' }) })
         .finally(() => stream.close())
       ctx.waitUntil(work)
       return stream.response
+    }
+
+    if (path === '/api/refund') {
+      if (request.method !== 'POST') return new Response(null, { status: 405, headers: { Allow: 'POST' } })
+      const origin = request.headers.get('Origin')
+      if (origin && origin !== url.origin) return json({ error: 'Origin not allowed' }, 403)
+      const parsed = await parseRefund(request)
+      if (!parsed) return json({ error: 'Send a conversation and a card.' }, 400)
+      const out = await refundPurchase(parsed, { conversations: new Conversations(env.DB), paypal: paypalFor(env), ownerSecret: env.SESSION_SECRET })
+      return json({ ...(out.event ? { event: out.event } : {}), ...(out.error ? { error: out.error } : {}) }, out.status)
     }
 
     if (path === '/api/compare') {
@@ -239,10 +305,10 @@ export default {
       const stream = ndjsonResponse()
       const work = compareTurn(parsed.conversation, {
         conversations: new Conversations(env.DB),
-        live: env.AI && env.QLOO_API_KEY
+        live: env.AI && (await tasteGraphLive(env))
           ? {
-              model: new WorkersAiModel(env.AI), qloo: (await qlooFor(request, env, ctx)).qloo, budget: ledgerFor(env),
-              takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), perVisitor(DAILY_COMPARES_PER_VISITOR)),
+              model: new WorkersAiModel(env.AI), qloo: (await qlooFor(request, env, ctx, judge)).qloo, budget: ledgerFor(env, judge),
+              takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), visitorLimit(DAILY_COMPARES_PER_VISITOR, judge, JUDGE_COMPARES)),
             }
           : null,
       }, stream.send)
@@ -270,7 +336,7 @@ export default {
         tools: qlooTools(),
         secret: env.SESSION_SECRET,
         allowOrigin: (o) => o === url.origin || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(o),
-        context: (req) => qlooFor(req, env, ctx),
+        context: async (req) => qlooFor(req, env, ctx, await isJudge(req, env)),
       })
       return server.handle(request)
     }

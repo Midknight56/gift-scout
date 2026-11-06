@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { QLOO_BASE, QlooClient, QlooOff, type Cache } from '../../src/qloo/client'
+import { QLOO_BASE, QlooClient, QlooOff, QlooRefused, type Cache } from '../../src/qloo/client'
 import { qlooTools, searchEntities, type QlooContext } from '../../src/qloo/tools'
 import { McpServer } from '../../src/mcp/server'
 
@@ -327,5 +327,25 @@ describe('audience signals', () => {
     expect(calls[0].url.searchParams.get('signal.demographics.gender')).toBe('male')
     expect(calls[1].url.searchParams.has('signal.demographics.gender')).toBe(false)
     expect(cache.size()).toBe(2)
+  })
+})
+
+describe('a key Qloo refuses', () => {
+  it('throws QlooRefused and reports it on 401 and 403, and not on a 500', async () => {
+    for (const status of [401, 403]) {
+      let refused = 0
+      const q = fakeQloo(() => ({ status, body: { message: 'Invalid API key' } }))
+      const client = new QlooClient(KEY, q.fetcher, memoryCache(), async () => true, undefined, () => { refused++ })
+      const error = await client.search('Phoebe Bridgers', 'artist').catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(QlooRefused)
+      expect((error as Error).message).toBe('The live taste graph is not available right now.')
+      expect(refused).toBe(1)
+    }
+    let refused = 0
+    const q = fakeQloo(() => ({ status: 500, body: {} }))
+    const client = new QlooClient(KEY, q.fetcher, memoryCache(), async () => true, undefined, () => { refused++ })
+    const error = await client.search('Phoebe Bridgers', 'artist').catch((e: unknown) => e)
+    expect(error).not.toBeInstanceOf(QlooRefused)
+    expect(refused).toBe(0)
   })
 })

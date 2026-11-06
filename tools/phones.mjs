@@ -111,8 +111,12 @@ async function measureDesktopScroll(page, viewport) {
     if (!chatBox) {
       faults.push('chat scroll box was not found')
     } else {
+      chatBox.style.scrollBehavior = 'auto'
       chatBox.scrollTop = chatBox.scrollHeight
-      if (!insideWindow(lastChatItem)) faults.push('last chat item is outside the window after scrolling chat to the end')
+      if (!insideWindow(lastChatItem)) {
+        const rect = lastChatItem.getBoundingClientRect()
+        faults.push(`last chat item is outside the window after scrolling chat to the end (top ${Math.round(rect.top)}, bottom ${Math.round(rect.bottom)}, window ${innerHeight})`)
+      }
     }
 
     const lastCall = document.querySelector('#calls-list .call-row:last-child')
@@ -120,6 +124,7 @@ async function measureDesktopScroll(page, viewport) {
     if (!panelBox) {
       faults.push('Behind the scenes scroll box was not found')
     } else {
+      panelBox.style.scrollBehavior = 'auto'
       panelBox.scrollTop = panelBox.scrollHeight
       if (!insideWindow(lastCall)) faults.push('last call row is outside the window after scrolling Behind the scenes to the end')
     }

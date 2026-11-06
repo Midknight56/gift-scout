@@ -12,7 +12,9 @@ import { neuronsFor, type ChatMessage, type Model, type ToolSpec } from './model
 import { carryOut, PLAN_SCOUT, type Plan, type Ran } from './plan'
 import { SYSTEM_PROMPT } from './prompt'
 import { fixWhyPronouns, pronounsFromMessage } from './pronouns'
-import { budgetIn, plain, saidIn } from './text'
+import { budgetIn, interestKey, plain, saidIn, takenBack } from './text'
+import type { Attempt } from './buy'
+import { matchesGiftType } from './product-type'
 
 export { budgetIn, plain, saidIn }
 
@@ -44,15 +46,22 @@ export interface ConversationState {
   said: string[]
   /** Names of every entity and tag a tool returned, by id. */
   names: Record<string, string>
+  /** Names the person has taken back. Older saved conversations may omit this. */
+  dropped_interests: string[]
+  /** The original plan names, including interests for which no seed was found. */
+  planned_interests?: string[]
+  /** The plan's original names for each resolved seed, including names shortened by a tag search. */
+  seed_interests?: Record<string, string[]>
   /** Every entity a taste_insights call returned: the only ground a card may stand on. */
-  found: Record<string, { entity: Found; seeds: string[]; tag_seeds?: string[]; from_call: number }>
+  found: Record<string, { entity: Found; seeds: string[]; tag_seeds?: string[]; from_call: number; stale?: boolean }>
   cards: Card[]
   /** The most they want to spend, once they have said. */
   budget_max?: number
+  attempts?: Attempt[]
 }
 
 export function newState(id: string): ConversationState {
-  return { id, turn: 0, calls: 0, said: [], names: {}, found: {}, cards: [] }
+  return { id, turn: 0, calls: 0, said: [], names: {}, found: {}, cards: [], dropped_interests: [] }
 }
 
 /** Room held for one model call; settle writes what the call really cost. */
@@ -141,13 +150,13 @@ const CHEAPER_GIFT: Record<(typeof IDEA_ORDER)[number], (name: string) => string
 }
 
 function availableKinds(state: ConversationState): typeof IDEA_ORDER[number][] {
-  return IDEA_ORDER.filter((kind) => Object.values(state.found).some((f) => f.entity.type === kind))
+  return IDEA_ORDER.filter((kind) => eligibleFound(state).some((f) => f.entity.type === kind))
 }
 
 function unusedKinds(state: ConversationState, cards: Card[]): string {
   const missing = availableKinds(state).filter((kind) => !cards.some((c) => c.entity.type === kind))
   if (!missing.length) return ''
-  const names = missing.map((kind) => Object.values(state.found).find((f) => f.entity.type === kind)!.entity.name)
+  const names = missing.map((kind) => eligibleFound(state).find((f) => f.entity.type === kind)!.entity.name)
   const kinds = missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(', ')} and ${missing.at(-1)}`
   return ` Qloo also gave ${kinds} results (${names.join(', ')}): add one idea for each.`
 }
@@ -160,7 +169,7 @@ function refusedGiftFeedback(dropped: Dropped[], state: ConversationState, budge
     if (reason === 'no Qloo result behind it') {
       parts.push('None of those rest on a taste_insights result. Use the ids it returned.')
     } else if (reason === 'over the budget') {
-      parts.push(`${reason}: ${gifts.join(', ')}. Each idea must start at or under $${budgetMax}. Choose cheaper gifts: ${availableKinds(state).map((kind) => CHEAPER_GIFT[kind](Object.values(state.found).find((f) => f.entity.type === kind)!.entity.name)).join('; ')}.`)
+      parts.push(`${reason}: ${gifts.join(', ')}. Each idea must start at or under $${budgetMax}. Choose cheaper gifts: ${availableKinds(state).map((kind) => CHEAPER_GIFT[kind](eligibleFound(state).find((f) => f.entity.type === kind)!.entity.name)).join('; ')}.`)
     } else {
       parts.push(`${reason}: ${gifts.join(', ')}.`)
     }
@@ -188,6 +197,7 @@ export function checkCards(proposed: ProposedCard[], state: ConversationState, b
     const low = Math.max(MIN_GIFT_PRICE, rawLow)
     const high = Math.min(MAX_GIFT_PRICE, rawHigh)
     if (!ground) dropped.push({ gift: p.gift, reason: 'no Qloo result behind it' })
+    else if (ground.stale || allSeedsDropped(state, ground.seeds)) dropped.push({ gift: p.gift, reason: 'rests on something they took back' })
     else if (p.kind && ground.entity.type !== p.kind) dropped.push({ gift: p.gift, reason: 'put under the wrong kind' })
     else if (ROUGH.test(ground.entity.name)) dropped.push({ gift: p.gift, reason: 'a title with a swear word, not for a gift card' })
     else if (used.has(p.entity_id)) dropped.push({ gift: p.gift, reason: 'the same Qloo result as another card' })
@@ -211,7 +221,7 @@ export function checkCards(proposed: ProposedCard[], state: ConversationState, b
         price_high: budgetMax !== undefined ? Math.min(high, budgetMax) : high,
         entity: ground.entity,
         seeds: ground.seeds,
-        ...(ground.entity.shares?.length ? { seed_shares: ground.entity.shares.map(({ name, share }) => ({ name, share })) } : {}),
+        ...(ground.entity.shares?.length ? { seed_shares: ground.entity.shares.filter(({ name }) => ground.seeds.includes(name) && !seedDropped(state, name)).map(({ name, share }) => ({ name, share })) } : {}),
         // Sent even when empty: without it the page lists every unshared seed, so a seed Qloo gave no share looked unscored.
         ...(ground.tag_seeds ? { tag_seeds: ground.tag_seeds } : {}),
         from_call: ground.from_call,
@@ -248,17 +258,59 @@ function toFound(e: Entity): Found {
 
 function tagFound(t: Tag): Found { return { id: t.id, name: t.name, type: 'tag' } }
 
+function seedDropped(state: ConversationState, name: string): boolean {
+  const dropped = new Set((state.dropped_interests ?? []).map(interestKey))
+  if (dropped.has(interestKey(name))) return true
+  return Object.entries(state.seed_interests ?? {}).some(([id, interests]) =>
+    (id === name || interestKey(state.names[id] ?? id) === interestKey(name)) && interests.some((interest) => dropped.has(interestKey(interest))))
+}
+
+function allSeedsDropped(state: ConversationState, seeds: string[]): boolean {
+  return seeds.length > 0 && seeds.every((seed) => seedDropped(state, seed))
+}
+
+function eligibleFound(state: ConversationState) {
+  return Object.values(state.found).filter((f) => !f.stale && !allSeedsDropped(state, f.seeds))
+}
+
+/** Invalidate evidence before building the next request; old turn events remain intact. */
+async function dropInterests(state: ConversationState, names: string[], emit: TurnOptions['emit']): Promise<void> {
+  const added = names.filter((name) => !(state.dropped_interests ?? []).some((old) => interestKey(old) === interestKey(name)))
+  state.dropped_interests = [...(state.dropped_interests ?? []), ...added]
+  if (!added.length) return
+  const gifts = state.cards.filter((card) => card.seeds.some((seed) => seedDropped(state, seed)))
+  state.cards = state.cards.filter((card) => !card.seeds.some((seed) => seedDropped(state, seed)))
+  if (gifts.length) await emit({ t: 'cards_withdrawn', cards: gifts.map((card) => card.id), names: added })
+  for (const [id, ground] of Object.entries(state.found)) {
+    const seeds = ground.seeds.filter((seed) => !seedDropped(state, seed))
+    if (seeds.length === ground.seeds.length) continue
+    if (!seeds.length) delete state.found[id]
+    else {
+      ground.seeds = seeds
+      ground.tag_seeds = ground.tag_seeds?.filter((seed) => !seedDropped(state, seed))
+      if (ground.entity.shares) ground.entity.shares = ground.entity.shares.filter(({ name }) => !seedDropped(state, name))
+      ground.stale = true
+    }
+  }
+  const from = plain(added.join(' and '))
+  await emit({ t: 'say', text: gifts.length
+    ? `Dropped what came from ${from}: ${gifts.map((card) => card.gift).join(', ')}.`
+    : `Nothing shown came from ${from}.` })
+}
+
 /** What a later turn starts from: the conversation so far, short, instead of every earlier tool answer. */
 export function contextFor(state: ConversationState, message: string): string {
   const lines = [`Earlier they said: ${state.said.join(' / ')}`]
-  const found = Object.values(state.found)
+  if (state.dropped_interests?.length) lines.push(`They no longer want: ${state.dropped_interests.join(' and ')}. Do not use them as seeds.`)
+  const found = eligibleFound(state)
   if (found.length) {
     lines.push('Results taste_insights already gave (you may use these ids again):')
     for (const f of found) lines.push(`${f.entity.name} (affinity ${(f.entity.affinity ?? 0).toFixed(2)}) [${f.entity.type}] id ${f.entity.id}, from ${f.seeds.join(' and ')}`)
   }
-  if (state.cards.length) {
+  const cards = state.cards.filter((card) => !card.seeds.some((seed) => seedDropped(state, seed)) && !state.found[card.entity.id]?.stale)
+  if (cards.length) {
     lines.push('The cards they see now:')
-    for (const c of state.cards) lines.push(`${c.gift}, $${c.price_low} to $${c.price_high}, entity ${c.entity.id}`)
+    for (const c of cards) lines.push(`${c.gift}, $${c.price_low} to $${c.price_high}, entity ${c.entity.id}`)
   }
   lines.push(`Their new message: ${message}`)
   return lines.join('\n')
@@ -285,17 +337,46 @@ function folded(value: string): string {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 }
 
-/** Keep the first affordable result whose title or brand names the card's Qloo entity. */
-export function pickProduct(products: SearchResult, entityName: string, priceHigh: number) {
+/** Rank affordable products that name the intended entity. */
+export function pickProduct(products: SearchResult, entityName: string, entityType: string, priceHigh: number, intendedGift?: string) {
   if (!products.ok) return undefined
-  const entity = folded(entityName)
-  const words = entity.split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 4)
-  return products.products.find((product) => {
-    if (product.currency.toLowerCase() !== 'usd') return false
-    if (product.price < MIN_GIFT_PRICE || product.price > priceHigh) return false
-    const text = folded(`${product.title} ${product.brand ?? ''}`)
-    return text.includes(entity) || (words.length > 0 && words.every((word) => text.includes(word)))
-  })
+  const normalize = (value: string) => folded(value).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const entity = normalize(entityName)
+  if (!entity) return undefined
+  const words = entity.split(' ')
+  const about = /\b(study\s+guide|summary|analysis|workbook|notes|quiz|companion|review|unofficial|sparknotes|cliffsnotes|guide\s+to|inspired\s+by)\b/i
+  const notBook = /\b(poster|print|art print|canvas|shirt|t shirt|tee|hoodie|sweatshirt|mug|cup|sticker|decal|magnet|pin|keychain|tote|bag|puzzle|figure|figurine|toy|costume|mask|candle|ornament|calendar|journal|notebook|bookmark)\b/i
+  const ranked = products.products.flatMap((product) => {
+    if (intendedGift !== undefined && !matchesGiftType(product, intendedGift, entityName, entityType)) return []
+    if (product.currency.toLowerCase() !== 'usd' || !Number.isFinite(product.price) || product.price < MIN_GIFT_PRICE || product.price > priceHigh) return []
+    const title = normalize(product.title)
+    const titleWithoutEntity = title.replace(new RegExp(`(?:^| )${entity.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&').replace(/ +/g, ' ')}(?= |$)`, 'g'), ' ').replace(/\s+/g, ' ').trim()
+    if (product.availability === 'OutOfStock' || product.condition === 'used' || about.test(titleWithoutEntity)) return []
+    let kind: 'book' | undefined
+    if (entityType === 'book') {
+      if (notBook.test(titleWithoutEntity.replace(/\blarge print\b/gi, ' '))) return []
+      if (product.category) {
+        if (![product.category.slug, product.category.title, ...product.category.path].some((name) => /\bbooks?\b/i.test(name))) return []
+        kind = 'book'
+      }
+    }
+    const edition = /\b(large print|edition|paperback|hardback|hardcover|softcover|mass market|kindle|ebook|audio book|audiobook|abridged|unabridged)\b/i
+    const base = normalize(product.title.replace(/\(([^)]*)\)|\[([^\]]*)\]/g, (text, round: string, square: string) => edition.test(round ?? square) ? '' : text).split(',')[0])
+    // A book may add known format or edition metadata, never another title word.
+    // Check the full title before stripping anything so title words remain meaningful.
+    const metadata = /^(?:(?:large print|paperback|hardback|hardcover|softcover|mass market|kindle|ebook|audio book|audiobook|abridged|unabridged|(?:(?:first|second|third|fourth|fifth|revised|updated|illustrated|deluxe|\d+(?:st|nd|rd|th)) )?(?:anniversary )?edition)(?: |$))+$/
+    const sameBook = title === entity || (title.startsWith(entity + ' ') && metadata.test(title.slice(entity.length + 1)))
+    if (entityType === 'book' && !sameBook) return []
+    const exact = entityType === 'book' ? sameBook : base === entity
+    const starts = title === entity || title.startsWith(entity + ' ')
+    const brand = entityType === 'brand' && normalize(product.brand ?? '') === entity
+    const all = words.every(word => title.split(' ').includes(word))
+    if (!exact && !starts && !brand && !all) return []
+    const match = exact ? 'exact title' as const : starts ? 'title starts with the name' as const : brand ? 'brand is the name' as const : 'title names it' as const
+    return [{ product, match, ...(kind ? { kind } : {}), rank: exact ? 3 : starts || brand ? 2 : 1 }]
+  }).sort((a, b) => b.rank - a.rank || a.product.price - b.product.price)
+  const best = ranked[0]
+  return best ? { product: best.product, match: best.match, ...(best.kind ? { kind: best.kind } : {}) } : undefined
 }
 
 async function attachProducts(cards: Card[], state: ConversationState, products: NonNullable<TurnOptions['products']>, emit: TurnOptions['emit'], now: () => number): Promise<void> {
@@ -311,13 +392,14 @@ async function attachProducts(cards: Card[], state: ConversationState, products:
     let result: SearchResult
     try { result = await products.search(query, { limit: 10, maxPrice: card.price_high }) }
     catch { result = { ok: false, reason: 'error' } }
-    const picked = pickProduct(result, card.entity.name, card.price_high)
+    const picked = pickProduct(result, card.entity.name, card.entity.type, card.price_high, card.gift)
     const reason = result.ok ? '' : result.reason === 'capped' ? 'Daily search limit reached.' : result.reason === 'spent' ? 'Product search credits are spent.' : 'Product search failed.'
     if (picked) {
-      card.product = { title: picked.title, ...(picked.brand ? { brand: picked.brand } : {}), price: picked.price, url: picked.url, ...(picked.image ? { image: picked.image } : {}), source: 'channel3' }
+      const item = picked.product
+      card.product = { ...item, title: plain(item.title), ...(item.brand ? { brand: plain(item.brand) } : {}), match: picked.match, source: 'channel3' }
     }
-    const top = picked ? [{ id: picked.id, name: picked.title, type: 'product', price: picked.price } as Found] : []
-    await emit({ t: 'result', n, tool: 'search_products', ok: result.ok, ms: Math.round(now() - started), cached: false, text: reason || (picked ? 'Product found.' : 'No matching product in the price range.'), top })
+    const top = picked ? [{ id: picked.product.id, name: picked.product.title, type: 'product', price: picked.product.price } as Found] : []
+    await emit({ t: 'result', n, tool: 'search_products', ok: result.ok, ms: Math.round(now() - started), cached: result.ok && result.cached, text: reason || (picked ? `Product found: ${picked.match}${picked.kind ? ', a book' : ''}.` : 'No matching product in the price range.'), top })
   }))
 }
 
@@ -327,8 +409,14 @@ async function attachProducts(cards: Card[], state: ConversationState, products:
 export async function runTurn(o: TurnOptions): Promise<ConversationState> {
   const now = o.now ?? Date.now
   const state: ConversationState = structuredClone(o.state)
+  state.dropped_interests ??= []
+  const scoredThisTurn = new Set<string>()
   state.turn += 1
   const first = state.said.length === 0
+  if (!first) {
+    const interests = [...Object.values(state.found).flatMap((f) => f.seeds), ...(state.planned_interests ?? []), ...Object.values(state.seed_interests ?? {}).flat()]
+    await dropInterests(state, takenBack(o.message, interests), o.emit)
+  }
   const pronoun = pronounsFromMessage(state.said[0] ?? o.message)
   const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT + (pronoun === 'he' ? '\nThe person is male: use he, him and his.' : pronoun === 'she' ? '\nThe person is female: use she and her.' : '') },
@@ -364,6 +452,13 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
     // dad in no city, and Qloo found no place.
     if (typeof args.location === 'string' && !saidIn(args.location, state.said)) delete args.location
     if (name === 'taste_insights') {
+      for (const field of ['seed_ids', 'seed_tags', 'filter_tags']) {
+        if (Array.isArray(args[field])) args[field] = args[field].filter((id: unknown) =>
+          typeof id !== 'string' || (!seedDropped(state, id) && !seedDropped(state, state.names[id] ?? id)))
+      }
+      if (!(Array.isArray(args.seed_ids) && args.seed_ids.length) && !(Array.isArray(args.seed_tags) && args.seed_tags.length)) {
+        return { ok: false, text: 'Use at least one active interest as a seed.', top: [] }
+      }
       delete args.audience_gender
       const firstPronoun = pronounsFromMessage(state.said[0] ?? o.message)
       if (firstPronoun) args.audience_gender = firstPronoun === 'he' ? 'male' : 'female'
@@ -399,7 +494,10 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
       const tagSeeds = (sc.seed_tags ?? []).map((id) => state.names[id] ?? id)
       for (const f of top) {
         const had = state.found[f.id]
-        if (!had || (f.affinity ?? 0) > (had.entity.affinity ?? 0)) state.found[f.id] = { entity: f, seeds, tag_seeds: tagSeeds, from_call: n }
+        if (!had || !scoredThisTurn.has(f.id) || (f.affinity ?? 0) > (had.entity.affinity ?? 0)) {
+          state.found[f.id] = { entity: f, seeds, tag_seeds: tagSeeds, from_call: n }
+        }
+        scoredThisTurn.add(f.id)
       }
     }
     await o.emit({ t: 'result', n, tool: name, ok: !result.isError, ms: Math.round(now() - started), cached: sc.cached === true, text, top: top.slice(0, 8) })
@@ -480,8 +578,14 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
           answer('Say at least one thing they love: ' + (problems[0] ?? 'loves is empty'))
           continue
         }
-        if (plan.budget_max) state.budget_max = plan.budget_max
-        const carried = await carryOut(plan, state.said, runTool)
+        if (plan.budget_max) state.budget_max = state.budget_max === undefined ? plan.budget_max : Math.min(state.budget_max, plan.budget_max)
+        state.planned_interests = [...new Set([...(state.planned_interests ?? []), ...plan.loves.map((love) => love.name)])]
+        await dropInterests(state, takenBack(o.message, plan.loves.map((love) => love.name)), o.emit)
+        plan.loves = plan.loves.filter((love) => !seedDropped(state, love.name))
+        const carried = await carryOut(plan, state.said, runTool, (id, interest) => {
+          state.seed_interests ??= {}
+          state.seed_interests[id] = [...new Set([...(state.seed_interests[id] ?? []), interest])]
+        })
         if (carried.outage) {
           await o.emit({ t: 'error', text: 'Qloo is not answering right now. The three examples still work.' })
           stopped = true
@@ -509,7 +613,11 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
         // The lower of what the model set and what the person said.
         const given = [args.budget_max as number | undefined, state.budget_max].filter((b): b is number => b !== undefined)
         const budgetMax = given.length ? Math.min(...given) : undefined
-        const proposed = args.ideas ? flattenIdeas(args.ideas as Parameters<typeof flattenIdeas>[0]) : args.cards as ProposedCard[]
+        const proposed = args.ideas ? flattenIdeas(args.ideas as Parameters<typeof flattenIdeas>[0]) : args.cards as ProposedCard[] | undefined
+        if (!proposed?.length) {
+          answer('Send ideas grouped by kind, each using an entity_id from taste_insights.')
+          continue
+        }
         const entityIds = proposed.map((idea) => idea.entity_id).sort()
         if (refusedGiftIds && entityIds.length === refusedGiftIds.length && entityIds.every((id, i) => id === refusedGiftIds![i])) {
           refused++

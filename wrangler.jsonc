@@ -15,5 +15,8 @@
   ],
   "durable_objects": { "bindings": [{ "name": "COUNTERS", "class_name": "DailyCounter" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DailyCounter"] }],
-  "observability": { "enabled": false }
+  "observability": { "enabled": false },
+  // Turned on 6 Nov 2026 after the Qloo judging ended: product search (Channel3, $0: no payment method on its account)
+  // and the plain labels switch (the page says "the taste graph" in place of Qloo).
+  "vars": { "CHANNEL3": "on", "PLAIN_LABELS": "on" }
 }

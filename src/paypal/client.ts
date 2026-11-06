@@ -2,19 +2,26 @@
 // Scout order carries a custom_id that starts with "gs-", so the shared sandbox app's other apps never touch ours.
 // Measured 23 Oct 2026 with the shared app: token 200, create 200 (PAYER_ACTION_REQUIRED, a payer-action link),
 // buyer approval in the sandbox, capture 201 COMPLETED, refund 201 COMPLETED.
+// Measured 28 Oct 2026 (tools/sandbox_finish_purchase.py): an order with a shipping address paid with the test card 201
+// COMPLETED, a tracker on its capture 201 SHIPPED, the order read back 200 with the tracker, the refund 201 COMPLETED, and an
+// order for approval with SET_PROVIDED_ADDRESS 200 PAYER_ACTION_REQUIRED.
 
 export const PAYPAL_SANDBOX = 'https://api-m.sandbox.paypal.com'
 
 export class PayPalError extends Error {
-  constructor(message: string, readonly status: number, readonly debugId?: string) { super(message) }
+  constructor(message: string, readonly status: number, readonly debugId?: string, readonly orderId?: string) { super(message) }
 }
 
-export interface Order { id: string; status: string; approveUrl?: string; customId?: string; amount?: string; captureId?: string }
+export interface Order { id: string; status: string; approveUrl?: string; customId?: string; amount?: string; captureId?: string; captureStatus?: string }
 
 /** PayPal's published sandbox test card (developer.paypal.com/tools/sandbox/card-testing). Sandbox only: the client
  *  talks to api-m.sandbox.paypal.com. Measured 23 Oct 2026: an order paid with it answered 201 COMPLETED in one call. */
 export const SANDBOX_TEST_CARD = { number: '4111111111111111', expiry: '2030-12', security_code: '123', name: 'Gift Scout Judge' }
 export interface Capture { orderId: string; status: string; captureId: string; amount: string; customId?: string }
+/** Where the gift goes. US only: a two letter state and a five digit ZIP. */
+export interface Shipping { name: string; line1: string; city: string; state: string; postal: string }
+export interface Tracker { id: string; status: string }
+export interface Refund { id: string; status: string }
 
 export class PayPal {
   private token?: { value: string; until: number }
@@ -70,6 +77,48 @@ export class PayPal {
     return out
   }
 
+  private async read(path: string): Promise<Record<string, unknown>> {
+    try {
+      const res = await this.timedFetch(this.base + path, {
+        method: 'GET', headers: { Authorization: 'Bearer ' + (await this.accessToken()) },
+      })
+      if (!res.ok) throw new PayPalError('PayPal did not answer the status request', res.status)
+      const out: unknown = await res.json()
+      if (!out || typeof out !== 'object' || Array.isArray(out)) throw new Error('invalid answer')
+      return out as Record<string, unknown>
+    } catch (error) {
+      if (error instanceof PayPalError) throw error
+      throw new PayPalError('PayPal did not answer the status request', 502)
+    }
+  }
+
+  async getOrder(orderId: string): Promise<Order> {
+    const out = await this.read(`/v2/checkout/orders/${encodeURIComponent(orderId)}`)
+    if (out.id !== orderId || typeof out.status !== 'string' || !Array.isArray(out.purchase_units) || !out.purchase_units.length) {
+      throw new PayPalError('PayPal returned an incomplete order answer', 502)
+    }
+    if (!out.purchase_units[0] || typeof out.purchase_units[0] !== 'object') throw new PayPalError('PayPal returned an incomplete order answer', 502)
+    const unit = out.purchase_units[0] as { custom_id?: string; amount?: { value: string }; payments?: { captures?: { id: string; status: string; amount?: { value: string }; custom_id?: string }[] } }
+    const captures = unit.payments?.captures
+    if (captures !== undefined && !Array.isArray(captures)) throw new PayPalError('PayPal returned an incomplete capture answer', 502)
+    const cap = captures?.[0]
+    if (captures?.length && (!cap || typeof cap.id !== 'string' || !cap.id || typeof cap.status !== 'string' || typeof cap.amount?.value !== 'string')) {
+      throw new PayPalError('PayPal returned an incomplete capture answer', 502)
+    }
+    const links = Array.isArray(out.links) ? out.links as { rel?: string; href?: string }[] : []
+    const approveUrl = links.find(l => l && (l.rel === 'payer-action' || l.rel === 'approve') && typeof l.href === 'string')?.href
+    const amount = cap?.amount?.value ?? unit.amount?.value
+    return { id: orderId, status: out.status, customId: cap?.custom_id ?? unit.custom_id,
+      ...(typeof amount === 'string' ? { amount } : {}), ...(approveUrl ? { approveUrl } : {}),
+      ...(cap ? { captureId: cap.id, captureStatus: cap.status } : {}) }
+  }
+
+  async getRefund(refundId: string): Promise<Refund> {
+    const out = await this.read(`/v2/payments/refunds/${encodeURIComponent(refundId)}`)
+    if (out.id !== refundId || typeof out.status !== 'string') throw new PayPalError('PayPal gave no refund', 502)
+    return { id: refundId, status: out.status }
+  }
+
   private async timedFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 8000)
@@ -81,27 +130,32 @@ export class PayPal {
    *  buyer to approve at PayPal's link. `requestId` makes a repeat of the same tap the same order. */
   async createOrder(o: {
     amount: string; customId: string; description: string; returnUrl: string; cancelUrl: string; requestId: string
-    card?: typeof SANDBOX_TEST_CARD
+    card?: typeof SANDBOX_TEST_CARD; shipping?: Shipping
   }): Promise<Order> {
     const source = o.card
       ? { card: o.card }
-      : { paypal: { experience_context: { brand_name: 'Gift Scout', user_action: 'PAY_NOW', shipping_preference: 'NO_SHIPPING', return_url: o.returnUrl, cancel_url: o.cancelUrl } } }
+      : { paypal: { experience_context: { brand_name: 'Gift Scout', user_action: 'PAY_NOW', shipping_preference: o.shipping ? 'SET_PROVIDED_ADDRESS' : 'NO_SHIPPING', return_url: o.returnUrl, cancel_url: o.cancelUrl } } }
+    const shipping = o.shipping && { type: 'SHIPPING', name: { full_name: o.shipping.name }, address: {
+      address_line_1: o.shipping.line1, admin_area_2: o.shipping.city, admin_area_1: o.shipping.state, postal_code: o.shipping.postal, country_code: 'US' } }
     const out = await this.call('/v2/checkout/orders', {
       intent: 'CAPTURE',
-      purchase_units: [{ custom_id: o.customId, description: o.description.slice(0, 127), amount: { currency_code: 'USD', value: o.amount } }],
+      purchase_units: [{ custom_id: o.customId, description: o.description.slice(0, 127), amount: { currency_code: 'USD', value: o.amount }, ...(shipping ? { shipping } : {}) }],
       payment_source: source,
     }, o.requestId)
-    if (typeof out.id !== 'string' || !out.id || typeof out.status !== 'string' || !out.status) {
-      throw new PayPalError('PayPal returned an incomplete order answer', 502)
+    const orderId = typeof out.id === 'string' && out.id ? out.id : undefined
+    if (!orderId || typeof out.status !== 'string' || !out.status) {
+      throw new PayPalError('PayPal returned an incomplete order answer', 502, undefined, orderId)
     }
-    const links = (out.links as { rel: string; href: string }[] | undefined) ?? []
+    const links = Array.isArray(out.links) ? out.links as { rel?: string; href?: string }[] : []
     const cap = (out.purchase_units as { payments?: { captures?: { id: string; status: string }[] } }[] | undefined)?.[0]?.payments?.captures?.[0]
+    if (cap && (typeof cap.id !== 'string' || !cap.id || typeof cap.status !== 'string')) throw new PayPalError('PayPal returned an incomplete capture answer', 502, undefined, orderId)
     return {
-      id: String(out.id),
+      id: orderId,
       status: String(out.status),
-      approveUrl: links.find((l) => l.rel === 'payer-action' || l.rel === 'approve')?.href,
+      approveUrl: links.find((l) => l && (l.rel === 'payer-action' || l.rel === 'approve') && typeof l.href === 'string')?.href,
       customId: o.customId,
       amount: o.amount,
+      ...(cap ? { captureStatus: cap.status } : {}),
       ...(cap?.status === 'COMPLETED' ? { captureId: cap.id } : {}),
     }
   }
@@ -112,6 +166,24 @@ export class PayPal {
     const cap = unit?.payments?.captures?.[0]
     if (!cap || typeof cap.id !== 'string' || !cap.id || typeof cap.status !== 'string' || typeof cap.amount?.value !== 'string') throw new PayPalError('PayPal gave no capture', 502)
     return { orderId, status: cap.status, captureId: cap.id, amount: cap.amount.value, customId: cap.custom_id ?? unit?.custom_id }
+  }
+
+  /** A tracker on a paid order's capture, so the buyer sees it on its way. One per capture: a repeat is the same tracker. */
+  async addTracker(orderId: string, captureId: string, trackingNumber: string): Promise<Tracker> {
+    const out = await this.call(`/v2/checkout/orders/${encodeURIComponent(orderId)}/track`, {
+      capture_id: captureId, tracking_number: trackingNumber, carrier: 'OTHER', carrier_name_other: 'Gift Scout sandbox', notify_payer: false,
+    }, 'track-' + captureId)
+    const trackers = (out.purchase_units as { shipping?: { trackers?: { id?: unknown; status?: unknown }[] } }[] | undefined)?.[0]?.shipping?.trackers ?? []
+    const tracker = trackers.find((t) => typeof t.id === 'string' && t.id.startsWith(captureId)) ?? trackers[0]
+    if (!tracker || typeof tracker.id !== 'string' || typeof tracker.status !== 'string') throw new PayPalError('PayPal gave no tracker', 502)
+    return { id: tracker.id, status: tracker.status }
+  }
+
+  /** A full refund of a capture. One per capture: a repeat is the same refund. */
+  async refund(captureId: string): Promise<Refund> {
+    const out = await this.call(`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, {}, 'refund-' + captureId)
+    if (typeof out.id !== 'string' || !out.id || typeof out.status !== 'string') throw new PayPalError('PayPal gave no refund', 502)
+    return { id: out.id, status: out.status }
   }
 
   /** Ask PayPal to verify a webhook against its original, unmodified event body. */

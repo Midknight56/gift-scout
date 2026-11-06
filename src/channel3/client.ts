@@ -11,39 +11,63 @@ export interface GiftProduct {
   currency: string
   url: string
   image?: string
+  availability?: 'InStock' | 'OutOfStock'
+  condition?: 'new' | 'used'
+  category?: { slug: string; title: string; path: string[] }
 }
 
 export type SearchResult =
-  | { ok: true; products: GiftProduct[] }
+  | { ok: true; products: GiftProduct[]; cached: boolean }
   | { ok: false; reason: 'off' | 'capped' | 'spent' | 'error' }
+
+export type ProductResult =
+  | { ok: true; product: GiftProduct }
+  | { ok: false; reason: 'off' | 'capped' | 'spent' | 'error' | 'gone' }
 
 interface RawProduct {
   id?: unknown
   title?: unknown
   brands?: { name?: unknown }[]
   images?: { url?: unknown; cleaned_url?: unknown }[]
-  offers?: { url?: unknown; price?: { price?: unknown; currency?: unknown } | null }[]
+  offers?: { availability?: unknown; condition?: unknown; url?: unknown; price?: { price?: unknown; currency?: unknown } | null }[]
+  category?: { slug?: unknown; title?: unknown; path?: { slug?: unknown; title?: unknown }[] } | null
 }
 
 function mapProduct(raw: RawProduct): GiftProduct | null {
   if (typeof raw.id !== 'string' || typeof raw.title !== 'string') return null
-  const offer = (raw.offers ?? []).find((item) =>
-    typeof item.url === 'string' && typeof item.price?.price === 'number' && Number.isFinite(item.price.price),
+  const usable = (raw.offers ?? []).filter((item) =>
+    typeof item.url === 'string' && https(item.url) &&
+    typeof item.price?.price === 'number' && Number.isFinite(item.price.price) &&
+    typeof item.price.currency === 'string' && /^[a-z]{3}$/i.test(item.price.currency) &&
+    item.availability !== 'OutOfStock' && item.condition !== 'used',
   )
+  const offer = usable.filter((item) => String(item.price?.currency).toLowerCase() === 'usd')
+    .sort((a, b) => Number(a.price?.price) - Number(b.price?.price))[0] ?? usable[0]
   if (!offer || typeof offer.url !== 'string' || typeof offer.price?.price !== 'number') return null
   const product: GiftProduct = {
     id: raw.id,
     title: raw.title,
     price: offer.price.price,
-    currency: typeof offer.price.currency === 'string' ? offer.price.currency : 'USD',
+    currency: offer.price.currency as string,
     url: offer.url,
   }
+  if (offer.availability === 'InStock') product.availability = offer.availability
+  if (offer.condition === 'new') product.condition = offer.condition
   const brand = raw.brands?.[0]?.name
   if (typeof brand === 'string' && brand) product.brand = brand
   const image = raw.images?.[0]
   if (typeof image?.cleaned_url === 'string') product.image = image.cleaned_url
   else if (typeof image?.url === 'string') product.image = image.url
+  const category = raw.category
+  if (typeof category?.slug === 'string' && typeof category.title === 'string') {
+    product.category = { slug: category.slug, title: category.title, path: (category.path ?? []).flatMap((part) =>
+      typeof part.slug === 'string' && part.slug ? [part.slug] : typeof part.title === 'string' ? [part.title] : []) }
+  }
   return product
+}
+
+function https(value: string): boolean {
+  try { return new URL(value).protocol === 'https:' } catch { return false }
 }
 
 function retrySeconds(value: string | null): number {
@@ -61,6 +85,27 @@ export class Channel3Client {
     private sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   ) {}
 
+  async product(id: string): Promise<ProductResult> {
+    if (!this.key) return { ok: false, reason: 'off' }
+    try {
+      if (!(await this.allow())) return { ok: false, reason: 'capped' }
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 8000)
+      try {
+        const response = await this.fetcher(`https://api.trychannel3.com/v1/products/${encodeURIComponent(id)}`, {
+          method: 'GET', headers: { 'x-api-key': this.key, Accept: 'application/json' }, signal: controller.signal,
+        })
+        if (response.status === 404) return { ok: false, reason: 'gone' }
+        if (response.status === 402) return { ok: false, reason: 'spent' }
+        if (!response.ok) return { ok: false, reason: 'error' }
+        const raw = await response.json() as RawProduct
+        if (!raw || typeof raw !== 'object') return { ok: false, reason: 'error' }
+        const product = mapProduct(raw)
+        return product ? { ok: true, product } : { ok: false, reason: 'gone' }
+      } finally { clearTimeout(timer) }
+    } catch { return { ok: false, reason: 'error' } }
+  }
+
   async search(query: string, opts: { limit?: number; maxPrice?: number } = {}): Promise<SearchResult> {
     if (!this.key) return { ok: false, reason: 'off' }
     const normalized = query.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -71,7 +116,7 @@ export class Channel3Client {
       const hit = await this.cache.get(cacheKey)
       if (hit !== null) {
         const products = JSON.parse(hit) as GiftProduct[]
-        if (Array.isArray(products)) return { ok: true, products }
+        if (Array.isArray(products)) return { ok: true, products, cached: true }
       }
       const body: { query: string; limit?: number; filters?: { price: { max_price: number } } } = { query: query.trim() }
       if (limit !== undefined) body.limit = limit
@@ -105,7 +150,7 @@ export class Channel3Client {
         if (!Array.isArray(data?.products)) return { ok: false, reason: 'error' }
         const products = data.products.map((item) => mapProduct(item as RawProduct)).filter((item): item is GiftProduct => item !== null)
         await this.cache.put(cacheKey, JSON.stringify(products), { expirationTtl: CHANNEL3_CACHE_SECONDS })
-        return { ok: true, products }
+        return { ok: true, products, cached: false }
       }
       return { ok: false, reason: 'error' }
     } catch {

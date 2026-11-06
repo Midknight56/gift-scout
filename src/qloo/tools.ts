@@ -34,8 +34,9 @@ function fold(s: string): string {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-/** True when a found name is the name asked for: equal, or one holds the other and is at least half its length. */
-export function nameMatches(name: string, query: string): boolean {
+/** Books need equal titles. Partial titles can name a different work; no unverified aliases are accepted. */
+export function nameMatches(name: string, query: string, type?: string): boolean {
+  if (type === 'book') return !!fold(name) && fold(name) === fold(query)
   const numbers: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10' }
   const numbered = (s: string) => fold(s).replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (word) => numbers[word])
   const n = numbered(name)
@@ -85,7 +86,7 @@ export const searchEntities: Tool<QlooContext> = {
       let { results, cached } = await ctx.qloo.search(query, args.type as EntityType | undefined, take)
       // A typed search whose best answer is not the name asked for ("Le Carre" as a book gave a Wheel of Time novel;
       // "Haruki Murakami" as a book gave a reader's guide) is asked again with no type, and a true match goes first.
-      if (args.type && !nameMatches(results[0]?.name ?? '', query)) {
+      if (args.type && !nameMatches(results[0]?.name ?? '', query, args.type as string)) {
         const any = await ctx.qloo.search(query, undefined, take)
         const best = any.results[0]
         // Only a person is taken from the untyped search: "single malt" as a brand gave Lagavulin, and untyped gave a

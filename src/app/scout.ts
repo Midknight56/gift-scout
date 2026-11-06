@@ -2,12 +2,13 @@
 // A turn is served in the cheapest honest way it can be:
 //   cache   the same first message was answered live before: its saved turn is sent again, 0 neurons, 0 Qloo calls;
 //   live    the agent runs on Workers AI and Qloo, inside the daily caps;
-//   replay  live is not possible (no Qloo key, the AI budget spent, the visitor's cap reached) and the message is one
+//   replay  live is not possible (no Qloo key, Qloo refused the key, the AI budget spent, the visitor's cap reached) and the message is one
 //           of the three examples: the run recorded for it is sent, labelled as recorded with its date.
 // Otherwise the turn ends with a calm line saying why. Every mode says which it is in the `run` event.
 import { newState, runTurn, type Budget, type ConversationState } from '../agent/agent'
 import type { ScoutEvent } from '../agent/events'
 import type { Model } from '../agent/model'
+import type { Purchase } from '../agent/buy'
 import type { SearchResult } from '../channel3/client'
 import type { Tool } from '../mcp/server'
 import type { QlooContext } from '../qloo/tools'
@@ -48,6 +49,7 @@ export interface ScoutDeps {
   products?: { search(query: string, opts?: { limit?: number; maxPrice?: number }): Promise<SearchResult> }
   newId(): string
   ownerToken(id: string): Promise<string>
+  isOwner(id: string, token: string | undefined): Promise<boolean>
   now?: () => number
   /** Milliseconds between the events of a cached or recorded run, so it reads like the agent at work (0 in tests). */
   paceMs?: number
@@ -74,29 +76,40 @@ export function ndjsonResponse(): { response: Response; send(e: ScoutEvent): Pro
   }
 }
 
-type Parsed = { ok: true; message: string; conversation?: string } | { ok: false; status: number; text: string }
+type Parsed = { ok: true; message: string; conversation?: string; owner?: string } | { ok: false; status: number; text: string }
 
 export async function parseScout(request: Request): Promise<Parsed> {
-  let body: { message?: unknown; conversation?: unknown }
+  let body: { message?: unknown; conversation?: unknown; owner?: unknown }
   try { body = (await request.json()) as typeof body } catch { return { ok: false, status: 400, text: 'Send JSON with a message.' } }
   const message = typeof body.message === 'string' ? body.message.trim() : ''
   if (message.length < 3) return { ok: false, status: 400, text: 'Tell me a little about them first.' }
   if (message.length > MAX_MESSAGE) return { ok: false, status: 400, text: `Keep it under ${MAX_MESSAGE} characters.` }
   const conversation = typeof body.conversation === 'string' && /^[A-Za-z0-9_-]{6,40}$/.test(body.conversation) ? body.conversation : undefined
-  return { ok: true, message, conversation }
+  return { ok: true, message, conversation, ...(typeof body.owner === 'string' ? { owner: body.owner } : {}) }
 }
 
 /** Runs one turn and sends its events through `send`. The caller closes the stream. */
-export async function scoutTurn(message: string, conversationId: string | undefined, deps: ScoutDeps, send: (e: ScoutEvent) => Promise<void>): Promise<void> {
+export async function scoutTurn(message: string, conversationId: string | undefined, deps: ScoutDeps, send: (e: ScoutEvent) => Promise<void>, owner?: string): Promise<void> {
   const saved = conversationId ? await deps.conversations.get(conversationId) : null
   if (conversationId && !saved) {
     await send({ t: 'error', text: 'That conversation has gone. Start a new one.' })
     return
   }
+  if (saved && !(await deps.isOwner(conversationId!, owner))) {
+    await send({ t: 'error', text: 'Only the person who started this conversation can change it. Ask again from the empty box to start your own.' })
+    return
+  }
   const id = saved ? conversationId! : deps.newId()
   const isNew = !saved
   const state = saved?.state ?? newState(id)
-  const turns = saved?.turns ?? []
+  const saveTurn = async (next: ConversationState, events: ScoutEvent[]) => {
+    if (isNew) await deps.conversations.put(id, next, [events])
+    else await deps.conversations.update(id, (fresh) => ({
+      state: { ...next, calls: Math.max(next.calls, fresh.state.calls), attempts: fresh.state.attempts,
+        purchases: (fresh.state as ConversationState & { purchases?: Purchase[] }).purchases },
+      turns: [...fresh.turns, events],
+    }))
+  }
   const turn = state.turn + 1
   const share = { t: 'done' as const, share: '/s/' + id }
   if (turn > MAX_TURNS) {
@@ -115,7 +128,7 @@ export async function scoutTurn(message: string, conversationId: string | undefi
       await send(events[0])
       if (isNew) await send({ t: 'owner', token: await deps.ownerToken(id) })
       await play(events.slice(1), deps.paceMs ?? 0, send)
-      await deps.conversations.put(id, { ...old.state, id }, [events])
+      await saveTurn({ ...old.state, id }, events)
       await send(share)
       return
     }
@@ -123,7 +136,7 @@ export async function scoutTurn(message: string, conversationId: string | undefi
 
   // 2. Live.
   let why = ''
-  if (!deps.live) why = 'Live scouting is off right now.'
+  if (!deps.live) why = 'The live taste graph is not available right now.'
   else if (!(await deps.live.budget.allow())) why = 'Live scouting has used its budget for today.'
   else if (!(await deps.live.takeVisitorTurn())) why = 'You have scouted a lot today.'
   if (!why && deps.live) {
@@ -135,7 +148,7 @@ export async function scoutTurn(message: string, conversationId: string | undefi
       products: deps.products,
       emit: async (e) => { events.push(e); await send(e) },
     })
-    await deps.conversations.put(id, next, [...turns, events])
+    await saveTurn(next, events)
     if (turn === 1 && next.cards.length >= 5 && new Set(next.cards.map((c) => c.entity.type)).size >= 3) {
       // A snapshot of the first turn alone, so a later visitor with the same message starts from exactly this turn.
       await deps.conversations.put('first-' + id, next, [events])
@@ -153,7 +166,7 @@ export async function scoutTurn(message: string, conversationId: string | undefi
     await send(events[0])
     if (isNew) await send({ t: 'owner', token: await deps.ownerToken(id) })
     await play(events.slice(1), deps.paceMs ?? 0, send)
-    await deps.conversations.put(id, { ...structuredClone(run.states[index]), id }, [...turns, events])
+    await saveTurn({ ...structuredClone(run.states[index]), id }, events)
     await send(share)
     return
   }

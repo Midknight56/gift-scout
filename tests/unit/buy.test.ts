@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { newState, type Budget, type ConversationState } from '../../src/agent/agent'
-import { runBuyTurn } from '../../src/agent/buy'
+import { quoteFor, runBuyTurn, type Attempt } from '../../src/agent/buy'
 import type { ScoutEvent } from '../../src/agent/events'
 import type { ChatMessage, Model, ModelReply, ToolCall } from '../../src/agent/model'
 import { buyTurn, ownerToken, paidReturn } from '../../src/app/buy'
@@ -45,6 +45,23 @@ function makeDb() { const db = new FakeD1(); dbs.push(db); return { db, conversa
 async function savedConversation(conversations: Conversations, s = state(), turns: ScoutEvent[][] = []) {
   await conversations.put(ID, s, turns)
 }
+
+it('keeps both payments when two cards finish capture together', async () => {
+  const { conversations } = makeDb(), s = state()
+  s.purchases = ['ORDER123', 'ORDER456'].map((order_id, i) => ({ card: `t1c${i + 1}`, gift: 'Gift', order_id, amount: '30.00', status: 'created' }))
+  await savedConversation(conversations, s, s.purchases.map((p) => [{ t: 'order', card: p.card, gift: p.gift, order_id: p.order_id, amount: p.amount, approve_url: 'https://paypal.test/pay' }]))
+  let captures = 0, release!: () => void
+  const both = new Promise<void>((resolve) => { release = resolve })
+  const paypal = { capture: async (id: string) => {
+    if (++captures === 2) release()
+    await both
+    return { status: 'COMPLETED', captureId: 'CAP' + id, amount: '30.00', customId: `gs-${ID}-t1c${id === 'ORDER123' ? 1 : 2}` }
+  } } as unknown as PayPal
+  const responses = await Promise.all(['ORDER123', 'ORDER456'].map((id) => paidReturn(new URL(`${ORIGIN}/paid?c=${ID}&token=${id}`), { conversations, paypal })))
+  expect(responses.map((r) => r.status)).toEqual([303, 303])
+  expect((await conversations.get(ID))?.state).toMatchObject({ purchases: [{ status: 'captured' }, { status: 'captured' }] })
+  expect((await conversations.get(ID))?.turns.flat().filter((e) => e.t === 'paid').map((e) => e.order_id).sort()).toEqual(['ORDER123', 'ORDER456'])
+})
 
 describe('PayPal client', () => {
   it('uses Basic client credentials and reuses a live token for a second order', async () => {
@@ -96,7 +113,7 @@ describe('runBuyTurn', () => {
     const model = scripted([reply([toolCall('t1c2')]), reply([toolCall()])]), paypal = fakePayPal(), events: ScoutEvent[] = []
     const next = await runBuyTurn({ cardId: 't1c1', state: state(), model, budget: budget(), paypal, origin: ORIGIN, emit: (e) => { events.push(e) } })
     expect(model.offered).toEqual([['buy_gift'], ['buy_gift']])
-    expect(paypal.orders).toEqual([{ amount: '30.00', customId: `gs-${ID}-t1c1`, description: 'A Fender gift card', returnUrl: `${ORIGIN}/paid?c=${ID}`, cancelUrl: `${ORIGIN}/s/${ID}`, requestId: `gs-${ID}-t1c1-30.00-paypal` }])
+    expect(paypal.orders).toEqual([{ amount: '30.00', customId: `gs-${ID}-t1c1`, description: 'A Fender gift card', returnUrl: `${ORIGIN}/paid?c=${ID}`, cancelUrl: `${ORIGIN}/s/${ID}`, requestId: `gs-${ID}-t1c1-a1` }])
     expect(events.map((e) => e.t)).toEqual(['call', 'result', 'call', 'result', 'order', 'usage'])
     expect(next.purchases).toMatchObject([{ card: 't1c1', order_id: 'ORDER123', amount: '30.00', status: 'created' }])
     expect(next.purchases?.[0].approve_url).toBe('https://paypal.test/approve')
@@ -139,7 +156,7 @@ describe('runBuyTurn', () => {
     const model = scripted([reply([toolCall('t1c1', 45)])]), paypal = fakePayPal(), events: ScoutEvent[] = []
     await runBuyTurn({ cardId: 't1c1', state: state(), model, budget: budget(), paypal, origin: ORIGIN, emit: (e) => { events.push(e) } })
     expect(paypal.orders).toHaveLength(0)
-    expect(events.find((e) => e.t === 'result')).toMatchObject({ ok: false, text: expect.stringContaining('from 20 to 40') })
+    expect(events.find((e) => e.t === 'result')).toMatchObject({ ok: false, text: 'The amount must be exactly 30.' })
   })
 
   it('requires the exact product price and uses the product title for the PayPal order', async () => {
@@ -184,14 +201,14 @@ describe('buy and paid routes', () => {
   it('reports buying off and makes no order when PayPal is absent', async () => {
     const { conversations } = makeDb(); await savedConversation(conversations)
     const events: ScoutEvent[] = [], paypal = fakePayPal()
-    await buyTurn(ID, 't1c1', { conversations, paypal: null, live: null, origin: ORIGIN, ownerSecret: OWNER_SECRET }, async (e) => { events.push(e) }, 'paypal', await ownerToken(ID, OWNER_SECRET))
+    await buyTurn(ID, 't1c1', { conversations, paypal: null, live: null, origin: ORIGIN, ownerSecret: OWNER_SECRET }, async (e) => { events.push(e) }, 'paypal', await ownerToken(ID, OWNER_SECRET), undefined, undefined, 30)
     expect(events).toMatchObject([{ t: 'run', mode: 'off', purpose: 'buy' }, { t: 'error' }]); expect(paypal.orders).toHaveLength(0)
   })
 
   it('saves a buy turn as a new conversation turn with buy purpose', async () => {
     const { conversations } = makeDb(); await savedConversation(conversations, state(), [[{ t: 'say', text: 'prior' }]])
     const model = scripted([reply([toolCall()])]), paypal = fakePayPal(), events: ScoutEvent[] = []
-    await buyTurn(ID, 't1c1', { conversations, paypal, live: { model, budget: budget(), takeVisitorBuy: async () => true }, origin: ORIGIN, ownerSecret: OWNER_SECRET }, async (e) => { events.push(e) }, 'paypal', await ownerToken(ID, OWNER_SECRET))
+    await buyTurn(ID, 't1c1', { conversations, paypal, live: { model, budget: budget(), takeVisitorBuy: async () => true }, origin: ORIGIN, ownerSecret: OWNER_SECRET }, async (e) => { events.push(e) }, 'paypal', await ownerToken(ID, OWNER_SECRET), undefined, undefined, 30)
     const saved = await conversations.get(ID)
     expect(saved?.turns).toHaveLength(2)
     expect(saved?.turns[1][0]).toMatchObject({ t: 'run', purpose: 'buy' })
@@ -287,5 +304,83 @@ describe("paying with PayPal's test card", () => {
     const body = JSON.parse(sent[1].body) as { payment_source: Record<string, unknown> }
     expect(Object.keys(body.payment_source)).toEqual(['card'])
     expect(order).toMatchObject({ id: 'O1', status: 'COMPLETED', captureId: 'C1' })
+  })
+})
+
+
+it('quotes the midpoint and refuses a different model amount before buying', async () => {
+  const s = state(); s.cards[0].price_high = 30
+  expect(quoteFor(s.cards[0])).toBe(25)
+  const model = scripted([reply([toolCall('t1c1', 22)]), reply([toolCall('t1c1', 25)])])
+  const paypal = fakePayPal(), events: ScoutEvent[] = []
+  await runBuyTurn({ cardId: 't1c1', state: s, model, budget: budget(), paypal, origin: ORIGIN, emit: e => { events.push(e) } })
+  expect(events).toContainEqual(expect.objectContaining({ t: 'result', ok: false, text: 'The amount must be exactly 25.' }))
+  expect(model.seen[0][1].content).toContain('The amount must be exactly 25.')
+  expect(paypal.orders).toMatchObject([{ amount: '25.00' }])
+})
+
+describe('saved payment attempts', () => {
+  it('does not call PayPal if saving the attempt fails', async () => {
+    const paypal = fakePayPal()
+    await expect(runBuyTurn({ cardId: 't1c1', state: state(), model: scripted([reply([toolCall()])]), budget: budget(), paypal, origin: ORIGIN,
+      saveAttempt: async () => { throw new Error('store unavailable') }, emit: () => {} })).rejects.toThrow('store unavailable')
+    expect(paypal.orders).toHaveLength(0)
+  })
+
+  it.each([new Error('timeout'), new PayPalError('unavailable', 503), new PayPalError('incomplete', 502)])('keeps an uncertain PayPal answer unknown: %s', async error => {
+    const paypal = fakePayPal(), events: ScoutEvent[] = []
+    paypal.createOrder = async () => { throw error }
+    const next = await runBuyTurn({ cardId: 't1c1', state: state(), model: scripted([reply([toolCall()])]), budget: budget(), paypal, origin: ORIGIN, emit: e => { events.push(e) } })
+    expect(next.attempts).toMatchObject([{ status: 'unknown' }])
+    expect(JSON.stringify(events)).not.toContain('Nothing was charged')
+    expect(events).toContainEqual(expect.objectContaining({ t: 'result', ok: false, text: 'We did not hear back from PayPal. Tap Pay again to check, or check PayPal.' }))
+  })
+
+  it('saves sent before creating an order and keeps old states usable', async () => {
+    const s = state(), saved: Attempt[] = [], paypal = fakePayPal()
+    expect(s).not.toHaveProperty('attempts')
+    paypal.createOrder = async () => {
+      expect(saved).toMatchObject([{ request_id: `gs-${ID}-t1c1-a1`, amount: '30.00', method: 'paypal', status: 'sent' }])
+      return { id: 'ORDER123', status: 'CREATED', approveUrl: 'https://paypal.test/approve' }
+    }
+    const next = await runBuyTurn({ cardId: 't1c1', state: s, model: scripted([reply([toolCall()])]), budget: budget(), paypal, origin: ORIGIN,
+      saveAttempt: async attempt => { saved.push(structuredClone(attempt)) }, emit: () => {} })
+    expect(next.attempts).toMatchObject([{ status: 'done', order_id: 'ORDER123', at: expect.any(String) }])
+    expect(saved.map(a => a.status)).toEqual(['sent', 'done'])
+    expect(next.purchases).toHaveLength(1)
+  })
+
+  it('does not say nothing was charged when the second tool call loses its answer', async () => {
+    const paypal = fakePayPal(), events: ScoutEvent[] = []
+    paypal.createOrder = async () => { throw new Error('timeout') }
+    const next = await runBuyTurn({ cardId: 't1c1', method: 'card', state: state(),
+      model: scripted([reply([toolCall('t1c2')]), reply([toolCall()])]), budget: budget(), paypal, origin: ORIGIN, emit: e => { events.push(e) } })
+    expect(JSON.stringify(events)).not.toContain('Nothing was charged')
+    expect(next.attempts).toMatchObject([{ status: 'unknown', request_id: `gs-${ID}-t1c1-a1` }])
+    expect(events).toContainEqual(expect.objectContaining({ t: 'result', ok: false, text: 'We did not hear back from PayPal. Tap Pay again to check, or check PayPal.' }))
+  })
+
+  it('records a definite refusal and uses the next attempt number on a new tap', async () => {
+    const paypal = fakePayPal(), events: ScoutEvent[] = [], requests: string[] = []
+    paypal.createOrder = async o => {
+      requests.push(o.requestId)
+      if (requests.length === 1) throw new PayPalError('refused', 422)
+      return { id: 'ORDER123', status: 'CREATED', approveUrl: 'https://paypal.test/approve' }
+    }
+    const options = { cardId: 't1c1', model: scripted([reply([toolCall()]), reply([toolCall()])]), budget: budget(), paypal, origin: ORIGIN, emit: (e: ScoutEvent) => { events.push(e) } }
+    const first = await runBuyTurn({ ...options, state: state() })
+    expect(first.attempts).toMatchObject([{ status: 'failed' }])
+    expect(events).toContainEqual({ t: 'error', text: 'PayPal did not make the order. Nothing was charged.' })
+    const next = await runBuyTurn({ ...options, state: first })
+    expect(requests).toEqual([`gs-${ID}-t1c1-a1`, `gs-${ID}-t1c1-a2`])
+    expect(next.attempts?.map(a => a.status)).toEqual(['failed', 'done'])
+  })
+
+  it.each(['VOIDED', 'DECLINED'])('records an order refused as %s as a failed attempt', async status => {
+    const paypal = fakePayPal(), events: ScoutEvent[] = []
+    paypal.createOrder = async () => ({ id: 'ORDER123', status })
+    const next = await runBuyTurn({ cardId: 't1c1', state: state(), model: scripted([reply([toolCall()])]), budget: budget(), paypal, origin: ORIGIN, emit: e => { events.push(e) } })
+    expect(next.attempts).toMatchObject([{ status: 'failed' }])
+    expect(events).toContainEqual({ t: 'error', text: 'PayPal did not make the order. Nothing was charged.' })
   })
 })

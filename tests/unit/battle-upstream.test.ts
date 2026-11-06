@@ -133,7 +133,7 @@ describe('buy stream and charge safety', () => {
     let orderCalls = 0
     const p = paypal((async (url: RequestInfo | URL) => String(url).endsWith('/token') ? json({}, 500) : (orderCalls++, orderResponse())) as typeof fetch)
     const events: ScoutEvent[] = []
-    await buyTurn('conv1234', 't1c1', { conversations, paypal: p, live: { model: buyModel, budget, takeVisitorBuy: async () => true }, origin: 'https://gift.test', ownerSecret: 'owner' }, async (e) => { events.push(e) }, 'paypal', await ownerToken('conv1234', 'owner'))
+    await buyTurn('conv1234', 't1c1', { conversations, paypal: p, live: { model: buyModel, budget, takeVisitorBuy: async () => true }, origin: 'https://gift.test', ownerSecret: 'owner' }, async (e) => { events.push(e) }, 'paypal', await ownerToken('conv1234', 'owner'), undefined, undefined, 20)
     expect(orderCalls).toBe(0); expect(events.at(-1)?.t).toBe('done'); expect(events.find((e) => e.t === 'error')).toBeTruthy()
     expect(JSON.stringify(events)).not.toContain(SECRET)
   })
@@ -141,7 +141,7 @@ describe('buy stream and charge safety', () => {
     const { conversations } = makeDb(); await conversations.put('conv1234', cardState(), [])
     const p = paypal((async (url: RequestInfo | URL) => String(url).endsWith('/token') ? tokenResponse() : json({ debug_id: SECRET }, 500)) as typeof fetch)
     const events: ScoutEvent[] = []
-    await buyTurn('conv1234', 't1c1', { conversations, paypal: p, live: { model: buyModel, budget, takeVisitorBuy: async () => true }, origin: 'https://gift.test', ownerSecret: 'owner' }, async (e) => { events.push(e) }, 'card', await ownerToken('conv1234', 'owner'))
+    await buyTurn('conv1234', 't1c1', { conversations, paypal: p, live: { model: buyModel, budget, takeVisitorBuy: async () => true }, origin: 'https://gift.test', ownerSecret: 'owner' }, async (e) => { events.push(e) }, 'card', await ownerToken('conv1234', 'owner'), undefined, undefined, 20)
     const saved = await conversations.get('conv1234')
     expect(events.at(-1)?.t).toBe('done'); expect(JSON.stringify(events).toLowerCase()).not.toContain('nothing was charged')
     expect(JSON.stringify(events).toLowerCase()).not.toContain('did not make the order')
@@ -152,8 +152,8 @@ describe('buy stream and charge safety', () => {
     const { conversations } = makeDb(); await conversations.put('conv1234', cardState(), [])
     const p = paypal((async (url: RequestInfo | URL) => String(url).endsWith('/token') ? tokenResponse() : json({}, 500)) as typeof fetch)
     const events: ScoutEvent[] = []
-    await buyTurn('conv1234', 't1c1', { conversations, paypal: p, live: { model: buyModel, budget, takeVisitorBuy: async () => true }, origin: 'https://gift.test', ownerSecret: 'owner' }, async (e) => { events.push(e) }, 'card', await ownerToken('conv1234', 'owner'))
-    const safe = 'PayPal could not confirm the payment. Check PayPal before trying again.'
+    await buyTurn('conv1234', 't1c1', { conversations, paypal: p, live: { model: buyModel, budget, takeVisitorBuy: async () => true }, origin: 'https://gift.test', ownerSecret: 'owner' }, async (e) => { events.push(e) }, 'card', await ownerToken('conv1234', 'owner'), undefined, undefined, 20)
+    const safe = 'We did not hear back from PayPal. Tap Pay again to check, or check PayPal.'
     expect(events.filter((e) => e.t === 'result' || e.t === 'error').map((e) => e.text)).toEqual([safe, safe])
   })
   it('does not mark an incomplete capture as paid', async () => {
@@ -172,7 +172,7 @@ describe('Workers AI and scout stream', () => {
     for (const failAt of [1, 2]) {
       const { db, conversations } = makeDb(); const spent: number[] = []; let calls = 0
       const model = new WorkersAiModel({ async run() { calls++; if (calls === failAt) throw new Error(SECRET); return { response: 'still thinking', usage: { prompt_tokens: 100, completion_tokens: 20, neurons: 7 } } } })
-      const deps: ScoutDeps = { conversations, runs: new RunCache(db), recorded: async () => [], tools: qlooTools(), live: { model, ctx: { qloo: new QlooClient('', failFetch(), new MemoryCache(), async () => true) }, budget: { allow: async () => true, reserve: async () => ({ settle: async (n) => { spent.push(n) } }) }, takeVisitorTurn: async () => true }, newId: () => `conv${failAt}123`, ownerToken: async () => 'hidden' }
+      const deps: ScoutDeps = { conversations, runs: new RunCache(db), recorded: async () => [], tools: qlooTools(), live: { model, ctx: { qloo: new QlooClient('', failFetch(), new MemoryCache(), async () => true) }, budget: { allow: async () => true, reserve: async () => ({ settle: async (n) => { spent.push(n) } }) }, takeVisitorTurn: async () => true }, newId: () => `conv${failAt}123`, ownerToken: async () => 'hidden', isOwner: async () => false }
       const events: ScoutEvent[] = []; await scoutTurn('A fresh request about a loved one.', undefined, deps, async (e) => { events.push(e) })
       expect(events.at(-1)?.t).toBe('done'); expect(events.at(-2)?.t).toBe('error'); expect(events.filter((e) => e.t === 'error')).toHaveLength(1)
       expect(events.some((e) => e.t === 'cards' && e.cards.length > 0)).toBe(false); expect(spent.reduce((a, b) => a + b, 0)).toBe(7 * (failAt - 1))
@@ -189,7 +189,7 @@ describe('Workers AI and scout stream', () => {
   ])('ends safely after Workers AI %s', async (_attack, upstream) => {
     const { db, conversations } = makeDb()
     const model = new WorkersAiModel({ run: async () => upstream() })
-    const deps: ScoutDeps = { conversations, runs: new RunCache(db), recorded: async () => [], tools: qlooTools(), live: { model, ctx: { qloo: new QlooClient('', failFetch(), new MemoryCache(), async () => true) }, budget, takeVisitorTurn: async () => true }, newId: () => 'conv7777', ownerToken: async () => 'hidden' }
+    const deps: ScoutDeps = { conversations, runs: new RunCache(db), recorded: async () => [], tools: qlooTools(), live: { model, ctx: { qloo: new QlooClient('', failFetch(), new MemoryCache(), async () => true) }, budget, takeVisitorTurn: async () => true }, newId: () => 'conv7777', ownerToken: async () => 'hidden', isOwner: async () => false }
     const events: ScoutEvent[] = []; await scoutTurn('A fresh request about a loved one.', undefined, deps, async (e) => { events.push(e) })
     expect(events.at(-1)?.t).toBe('done'); expect(events.at(-2)?.t).toBe('error'); expect(events.filter((e) => e.t === 'error')).toHaveLength(1)
     expect(events.some((e) => e.t === 'cards' && e.cards.length > 0)).toBe(false); expect(JSON.stringify(events)).not.toContain(SECRET)

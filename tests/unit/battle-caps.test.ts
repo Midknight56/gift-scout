@@ -6,7 +6,7 @@ vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }))
 import { runTurn, newState, type Budget } from '../../src/agent/agent'
 import type { Model, ModelReply, ToolCall } from '../../src/agent/model'
 import { EXAMPLES, scoutTurn, type RecordedRun, type ScoutDeps } from '../../src/app/scout'
-import { buyTurn, ownerToken } from '../../src/app/buy'
+import { buyTurn, ownerToken, tokenMatchesOwner } from '../../src/app/buy'
 import { qlooTools } from '../../src/qloo/tools'
 import { QlooClient, type Cache } from '../../src/qloo/client'
 import { DAILY_BUYS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DEFAULT_DAILY_NEURONS, DEFAULT_ACCOUNT_NEURONS, MAX_CALL_NEURONS } from '../../src/limits'
@@ -62,11 +62,12 @@ function scoutDeps(model: Model, budget: Budget, ctx = qloo(async () => true), v
     live: { model, ctx, budget, takeVisitorTurn: visitor },
     newId: () => `battle${String(++ids).padStart(4, '0')}`,
     ownerToken: (id) => ownerToken(id, 'battle-secret'), paceMs: 0,
+    isOwner: (id, token) => tokenMatchesOwner(id, token, 'battle-secret'),
   }
 }
 async function streamTurn(deps: ScoutDeps, message: string, conversation?: string) {
   const events: ScoutEvent[] = []
-  await scoutTurn(message, conversation, deps, async (event) => { events.push(event) })
+  await scoutTurn(message, conversation, deps, async (event) => { events.push(event) }, conversation ? await deps.ownerToken(conversation) : undefined)
   return events
 }
 
@@ -136,7 +137,7 @@ describe('cap battle tests', () => {
     expect(replay.at(-1)?.t).toBe('done')
   })
 
-  it('denies the seventh daily buy before a model call or PayPal order', async () => {
+  it('denies the seventh daily buy before a PayPal order', async () => {
     let used = DAILY_BUYS_PER_VISITOR
     const take = async () => { if (used >= DAILY_BUYS_PER_VISITOR) return false; used++; return true }
     const store = db(), conversations = new Conversations(store)
@@ -146,12 +147,12 @@ describe('cap battle tests', () => {
     const paypal = { createOrder: async () => { orders++; throw new Error('must not create') } } as never
     const model = scripted([reply([call('buy_gift', { card_id: 't1c1', amount_usd: 15 })])])
     const events: ScoutEvent[] = []
-    await buyTurn(id, 't1c1', { conversations, paypal, live: { model, budget: open, takeVisitorBuy: take }, origin: 'https://gift.test', ownerSecret: 'battle-secret' }, async (e) => { events.push(e) }, 'paypal', await ownerToken(id, 'battle-secret'))
-    expect(model.calls).toBe(0)
+    await buyTurn(id, 't1c1', { conversations, paypal, live: { model, budget: open, takeVisitorBuy: take }, origin: 'https://gift.test', ownerSecret: 'battle-secret' }, async (e) => { events.push(e) }, 'paypal', await ownerToken(id, 'battle-secret'), undefined, undefined, 15)
+    expect(model.calls).toBe(1)
     expect(orders).toBe(0)
     expect(events.some((e) => e.t === 'error' && /bought a lot today/.test(e.text))).toBe(true)
-    expect(events.at(-1)?.t).toBe('error')
-    expect(events.at(-1)).toMatchObject({ text: expect.stringMatching(/bought a lot today/) })
+    expect(events.at(-1)?.t).toBe('done')
+    expect(events.find(e => e.t === 'error')).toMatchObject({ text: expect.stringMatching(/bought a lot today/) })
   })
 
   it('resets a DailyCounter on a new day', async () => {

@@ -2,11 +2,12 @@ import type { Budget } from './agent'
 import type { ScoutEvent } from './events'
 import { neuronsFor, type Model } from './model'
 import { QlooError, type EntityType, type QlooClient } from '../qloo/client'
-import { pronounsFromMessage } from './pronouns'
+import { nameMatches, otherTypeTag } from '../qloo/tools'
+import { plain as displayText } from './text'
 
 export const COMPARE_KINDS = ['brand', 'book', 'artist', 'podcast', 'destination', 'place'] as const
 export type CompareKind = (typeof COMPARE_KINDS)[number]
-export interface PlainIdea { gift: string; name: string; kind: CompareKind }
+export interface PlainIdea { gift: string; name: string; kind: CompareKind; lookup_name?: string }
 
 const prompt = 'Give six gift ideas based on what the person says. Return only a JSON array in this exact shape: [{ "gift": "...", "name": "the brand, book, artist, podcast or place to give", "kind": "brand|book|artist|podcast|destination|place" }]. Use six ideas or fewer if needed. Use plain words.'
 
@@ -28,24 +29,51 @@ export function parsePlainIdeas(value: string): PlainIdea[] | null {
     const kind = idea.kind === 'author' || idea.kind === 'writer' ? 'book'
       : idea.kind === 'band' || idea.kind === 'musician' ? 'artist' : idea.kind
     if (!(COMPARE_KINDS as readonly string[]).includes(kind)) continue
-    ideas.push({ gift, name, kind: kind as CompareKind })
+    const displayGift = displayText(gift), displayName = displayText(name)
+    if (!displayGift || !displayName) continue
+    ideas.push({ gift: displayGift, name: displayName, kind: kind as CompareKind, ...(displayName !== name ? { lookup_name: name } : {}) })
   }
   return ideas.length ? ideas : null
 }
 
-export function firstTurnSeedIds(turns: ScoutEvent[][]): string[] {
-  const first = turns[0] ?? []
-  const ids: string[] = []
-  for (const event of first) {
-    if (event.t !== 'call' || event.tool !== 'taste_insights') continue
-    const seeds = event.args.seed_ids
-    if (Array.isArray(seeds)) for (const id of seeds) if (typeof id === 'string' && id.length) ids.push(id)
+type Signals = Omit<Parameters<QlooClient['insights']>[0], 'type' | 'take' | 'resultIds'>
+
+export function firstTurnContexts(turns: ScoutEvent[][]): { kinds: Map<string, Signals>; nearest: Signals } {
+  const kinds = new Map<string, Signals>()
+  const nearest: Signals = { seedIds: [] }
+  const merge = (into: Signals, from: Signals) => {
+    into.seedIds = [...new Set([...into.seedIds, ...from.seedIds])]
+    for (const key of ['seedTags', 'filterTags'] as const) {
+      if (from[key]) into[key] = [...new Set([...(into[key] ?? []), ...from[key]])]
+    }
+    // Scalar filters cannot be combined in one question; the latest supplied value wins.
+    if (from.location !== undefined) into.location = from.location
+    if (from.age !== undefined) into.age = from.age
+    if (from.gender !== undefined) into.gender = from.gender
   }
-  return [...new Set(ids)]
+  for (const event of turns[0] ?? []) {
+    if (event.t !== 'call' || event.tool !== 'taste_insights' || typeof event.args.target_type !== 'string') continue
+    const args = event.args
+    const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string' && id.length > 0) : []
+    const signals: Signals = {
+      seedIds: strings(args.seed_ids),
+      seedTags: strings(args.seed_tags),
+      filterTags: strings(args.filter_tags).filter((tag) => !otherTypeTag(tag, args.target_type as EntityType)),
+      ...(typeof args.location === 'string' ? { location: args.location } : {}),
+      ...(typeof args.audience_age === 'string' ? { age: args.audience_age as Signals['age'] } : {}),
+      ...(typeof args.audience_gender === 'string' ? { gender: args.audience_gender as Signals['gender'] } : {}),
+    }
+    const kind = args.target_type as string
+    const context = kinds.get(kind) ?? { seedIds: [] }
+    merge(context, signals)
+    kinds.set(kind, context)
+    merge(nearest, signals)
+  }
+  return { kinds, nearest }
 }
 
 export async function runCompare(o: {
-  message: string; seedIds: string[]; cards: { entity: { affinity?: number } }[]; callStart?: number
+  message: string; turns: ScoutEvent[][]; cards: { entity: { affinity?: number } }[]; callStart?: number
   qloo: QlooClient; model: Model; budget: Budget; emit(event: ScoutEvent): Promise<void>
 }): Promise<void> {
   const held = await o.budget.reserve()
@@ -67,10 +95,9 @@ export async function runCompare(o: {
     return
   }
   let calls = o.callStart ?? 0
-  const pronoun = pronounsFromMessage(o.message)
-  const gender = pronoun === 'he' ? 'male' : pronoun === 'she' ? 'female' : undefined
-  const plain: { gift: string; name: string; kind: string; found: boolean; affinity?: number }[] = []
-  const qlooMeans = o.cards.map((card) => card.entity.affinity).filter((score): score is number => typeof score === 'number')
+  const contexts = firstTurnContexts(o.turns)
+  const plain: Extract<ScoutEvent, { t: 'compare' }>['plain'] = []
+  const qlooMeans = o.cards.map((card) => card.entity.affinity).filter((score): score is number => typeof score === 'number' && Number.isFinite(score))
   const call = async (tool: string, args: Record<string, unknown>, operation: () => Promise<{ results: import('../qloo/client').Entity[]; cached: boolean }>) => {
     const n = ++calls
     await o.emit({ t: 'call', n, tool, args })
@@ -87,17 +114,26 @@ export async function runCompare(o: {
   }
   for (const idea of ideas) {
     const type = idea.kind as EntityType
-    const hits = await call('search_entities', { query: idea.name, type, take: 1 }, () => o.qloo.search(idea.name, type, 1))
+    const context = contexts.kinds.has(type) ? 'same' : 'nearest'
+    const signals = contexts.kinds.get(type) ?? contexts.nearest
+    const lookupName = idea.lookup_name ?? idea.name
+    const hits = await call('search_entities', { query: lookupName, type, take: 1 }, () => o.qloo.search(lookupName, type, 1))
     const hit = hits[0]
-    if (!hit) { plain.push({ ...idea, found: false }); continue }
-    const args = { seed_ids: o.seedIds, target_type: type, result_ids: [hit.id], take: 1, ...(gender ? { audience_gender: gender } : {}) }
-    const scored = await call('taste_insights', args, () => o.qloo.insights({ seedIds: o.seedIds, type, resultIds: [hit.id], take: 1, gender }))
-    const match = scored.find((entity) => entity.id === hit.id)
-    plain.push(match ? { ...idea, found: true, ...(match.affinity === undefined ? {} : { affinity: match.affinity }) } : { ...idea, found: false })
+    if (!hit || hit.type !== type || !nameMatches(hit.name, lookupName, type)) { plain.push({ ...idea, context, found: false }); continue }
+    const args = {
+      seed_ids: signals.seedIds, seed_tags: signals.seedTags, filter_tags: signals.filterTags,
+      location: signals.location, audience_age: signals.age, audience_gender: signals.gender,
+      target_type: type, result_ids: [hit.id], take: 1,
+    }
+    const scored = await call('taste_insights', args, () => o.qloo.insights({ ...signals, type, resultIds: [hit.id], take: 1 }))
+    const match = scored.find((entity) => entity.id === hit.id && entity.type === type && nameMatches(entity.name, hit.name, type))
+    plain.push(match ? { ...idea, context, found: true, matched: { id: hit.id, name: hit.name, type: hit.type }, ...(match.affinity === undefined ? {} : { affinity: match.affinity }) } : { ...idea, context, found: false })
   }
   const scores = plain.flatMap((idea) => idea.found && typeof idea.affinity === 'number' ? [idea.affinity] : [])
   const mean = (values: number[]) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 1000) / 1000 : null
-  await o.emit({ t: 'compare', plain, plain_mean: mean(scores), qloo_mean: mean(qlooMeans), not_found: plain.filter((idea) => !idea.found).length })
+  await o.emit({ t: 'compare', plain, plain_mean: mean(scores), qloo_mean: mean(qlooMeans), not_found: plain.filter((idea) => !idea.found).length,
+    coverage: { plain_found: plain.filter((idea) => idea.found).length, plain_total: plain.length, cards_scored: qlooMeans.length, cards_total: o.cards.length },
+  })
   await o.emit({ t: 'usage', model_calls: 1, neurons: Math.round(spent * 10) / 10 })
 }
 

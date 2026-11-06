@@ -8,7 +8,10 @@
 //
 // Happy path: example 2, six cards with Qloo's split in the cards, panel and share page, the panel's Qloo calls,
 // "Compare with Qloo off", Qloo's scores for the plain model's picks, "Make it cheaper, under 30 dollars.", "Buy this one", PayPal sandbox approval as the sandbox buyer, back to the share page with
-// the capture row. Bad paths: a two letter message, a share link that never existed, a /paid link Gift Scout never made,
+// the capture row, the PayPal tracker with only the city on the page, and "Changed my mind" refunding the capture.
+// One order block keeps the amount, city and tracker through the refund; shared orders have no refund button.
+// Shipping errors stay at their field, focus it, and clear when it is edited; paid cards have no pay buttons.
+// Bad paths: coming back from PayPal frees the pay buttons, the live taste graph down (the page says so up front), a four digit ZIP, a refund without or with a wrong owner token, a second refund, a two letter message, a share link that never existed, a /paid link Gift Scout never made,
 // a stranger seeing no buy button or compare button, a compare without the owner token, a second compare, a buy without the owner token, and a buy with a wrong owner token.
 // The sandbox buyer's login is read from the secrets file at run time and never printed.
 // Run it through the shared browser lock: python A:/Projects/shipatonv2/tools/pw_lock.py run gift-scout -- node tools/e2e.mjs ...
@@ -78,9 +81,21 @@ async function main() {
     check('a share link that never existed says so', /expired or never existed/i.test(await page.locator('.error-line').first().innerText()))
     const bogus = await page.goto(BASE + '/paid?c=nosuchconversation&token=ABCDEFGHIJ123456')
     check('a /paid link Gift Scout never made is refused', bogus?.status() === 404, `HTTP ${bogus?.status()}`)
+    // The live taste graph down: the page says so before anything is typed, and the three examples stay.
+    await page.route('**/api/examples', async (route) => {
+      const real = await (await route.fetch()).json()
+      await route.fulfill({ json: { ...real, live: false } })
+    })
+    await page.goto(BASE + '/')
+    await page.locator('.graph-off').waitFor({ timeout: 15000 })
+    check('with the live taste graph down, the page says so before anything is typed', /live taste graph is not available/i.test(await page.locator('.graph-off').innerText()))
+    check('and the three examples are still offered', (await page.locator('[data-example]').count()) === 3)
+    await page.unroute('**/api/examples')
 
     // The happy path.
     await page.goto(BASE + '/')
+    await page.locator('[data-example]').first().waitFor({ timeout: 15000 })
+    check('with the live taste graph up, the page shows no such line', (await page.locator('.graph-off').count()) === 0)
     await page.locator('[data-example]').nth(1).click()
     await page.locator('.gift-card').nth(4).waitFor({ timeout: 120000 })
     await page.waitForTimeout(1500)
@@ -216,9 +231,28 @@ async function main() {
     check('the narrowing turn keeps every card at 30 dollars or less', highs.length > 0 && highs.every((h) => h <= 30), prices.join(', '))
 
     await page.locator('[data-buy]').first().click()
+    // Bad path: an address PayPal could not ship to is caught on the page, and no order is made.
+    const zip = page.locator('.ship-form [name="ship-postal"]').first()
+    check('the pay choice asks where the gift goes', await zip.count() === 1)
+    await zip.fill('9513')
+    await page.locator(PAY === 'testcard' ? '[data-pay="card"]' : '[data-pay="paypal"]').first().click()
+    await page.waitForTimeout(500)
+    check('a four digit ZIP is refused and nothing is ordered', /five digit ZIP/i.test(await page.locator('.error-line').last().innerText()) && await page.locator('.pay-row').count() === 0)
+    check('the ZIP error stays inside the shipping form', await zip.locator('xpath=ancestor::fieldset').locator('.error-line').count() === 1)
+    check('the ZIP is marked invalid and focused', await zip.getAttribute('aria-invalid') === 'true' && await zip.evaluate((input) => document.activeElement === input))
+    await zip.fill('95131')
+    check('editing the ZIP clears its error', await zip.locator('..').locator('.error-line').count() === 0 && await zip.getAttribute('aria-invalid') === null)
     if (PAY === 'testcard') {
       await page.locator('[data-pay="card"]').first().click()
-      await page.locator('.pay-row.paid').waitFor({ timeout: 120000 })
+      // With product search on, the server checks the live offer first. A changed price asks for one more tap.
+      const paidRow = page.locator('.pay-row.paid')
+      const changed = page.getByText('This offer changed', { exact: false }).first()
+      await Promise.race([paidRow.waitFor({ timeout: 120000 }).catch(() => {}), changed.waitFor({ timeout: 120000 }).catch(() => {})])
+      if (await paidRow.count() === 0 && await changed.count() > 0) {
+        check('a changed offer stops the order and asks for another tap', await page.locator('.pay-row.paid').count() === 0, (await changed.innerText()).slice(0, 120))
+        await page.locator('[data-pay="card"]').first().click()
+      }
+      await paidRow.waitFor({ timeout: 120000 })
     } else {
       await page.locator('[data-pay="paypal"]').first().click()
       await payAtPayPal(page)
@@ -227,6 +261,85 @@ async function main() {
     }
     const paid = await page.locator('.pay-row.paid').innerText()
     check('back at Gift Scout, the panel shows the capture', /capture [A-Z0-9]{10,}/.test(paid), paid.replace(/\s+/g, ' ').slice(0, 120))
+    await page.locator('.pay-row.shipped').waitFor({ timeout: 30000 })
+    const shipped = await page.locator('.pay-row.shipped').innerText()
+    // The street stays in the visitor's own form; the saved conversation (what a share link shows) keeps the city only.
+    const savedText = await page.evaluate(async (id) => (await fetch(`/api/conversation/${id}`)).text(), conversationId)
+    check('the panel shows the PayPal tracker and only the city', /Test tracker for San Jose, CA\. Nothing ships\./.test(shipped) && /Tracking GS[A-Z0-9]{10,}/.test(shipped) && /San Jose, CA/.test(savedText) && !/Main St|95131|Sam Rivera/.test(savedText), shipped.replace(/\s+/g, ' ').slice(0, 120))
+    const orderBlock = page.locator('.order-block')
+    check('one order block shows the amount, city and tracker only', await orderBlock.count() === 1 && await orderBlock.innerText().then((text) => text.includes(paid.match(/\$[\d.]+/)?.[0] ?? 'missing amount') && text.includes('San Jose, CA') && text.includes(shipped.match(/GS[A-Z0-9]{10,}/)?.[0] ?? 'missing tracker') && !/Main St|95131|Sam Rivera/.test(text)))
+    const paidCard = await orderBlock.getAttribute('data-order-card')
+    check('the paid card has no pay buttons', await page.evaluate((card) => !document.querySelector(`[data-pay][data-card="${CSS.escape(card)}"], [data-buy="${CSS.escape(card)}"]`), paidCard))
+    check('no error remains after payment', await page.locator('.error-line').count() === 0)
+    const sharedOrderContext = await browser.newContext()
+    try {
+      const sharedOrderPage = await sharedOrderContext.newPage()
+      await sharedOrderPage.goto(`${BASE}/s/${conversationId}`)
+      await sharedOrderPage.locator('.order-block .order-title').filter({ hasText: 'Paid, test tracker added' }).waitFor({ timeout: 15000 })
+      check('a stranger sees the order block without a refund button', await sharedOrderPage.locator('.order-block').count() === 1 && await sharedOrderPage.locator('[data-refund]').count() === 0)
+    } finally {
+      await sharedOrderContext.close()
+    }
+
+    // Bad paths for the refund: a stranger and a missing owner token are refused before PayPal is asked.
+    // The conversation and its owner token are the ones this tab keeps in sessionStorage (one conversation in this run).
+    const refundCard = await page.locator('[data-refund]').first().getAttribute('data-refund')
+    const refundStatus = (owner) => page.evaluate(async ({ owner, card }) => {
+      const key = Object.keys(sessionStorage).find((k) => k.startsWith('gift-scout-owner:'))
+      const body = { conversation: key.slice('gift-scout-owner:'.length), card, ...(owner === 'mine' ? { owner: sessionStorage.getItem(key) } : owner ? { owner } : {}) }
+      const res = await fetch('/api/refund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      return res.status
+    }, { owner, card: refundCard })
+    check('a refund without the owner token is refused', await refundStatus(null) === 403)
+    check('a refund with a wrong owner token is refused', await refundStatus('0'.repeat(64)) === 403)
+
+    await page.locator('[data-refund]').first().click()
+    await page.locator('.pay-row.refunded').waitFor({ timeout: 60000 })
+    const refunded = await page.locator('.pay-row.refunded').innerText()
+    check('"Changed my mind" refunds the capture in the PayPal sandbox', /refund [A-Z0-9]{10,}/.test(refunded), refunded.replace(/\s+/g, ' ').slice(0, 120))
+    check('the refund button is gone after the refund', await page.locator('[data-refund]').count() === 0)
+    check('the same order block now says Refunded', await page.locator('.order-block').count() === 1 && await page.locator('.order-block .order-title').innerText() === 'Refunded')
+    check('a second refund is refused', await refundStatus('mine') === 409)
+    const paypalReturnContext = await browser.newContext()
+    try {
+      const paypalReturnPage = await paypalReturnContext.newPage()
+      await paypalReturnPage.route(/paypal\.com/, (route) => route.abort())
+      await paypalReturnPage.goto(BASE)
+      await paypalReturnPage.locator('[data-example]').nth(1).click()
+      await paypalReturnPage.locator('[data-buy]').first().waitFor({ timeout: 120000 })
+      await paypalReturnPage.locator('[data-buy]').first().click()
+      await paypalReturnPage.locator('[data-pay="paypal"]').click()
+      await paypalReturnPage.locator('.say-line').filter({ hasText: 'PayPal' }).waitFor({ timeout: 15000 })
+      await paypalReturnPage.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
+      const paypalButton = paypalReturnPage.locator('[data-pay="paypal"]')
+      check('coming back from PayPal frees the pay buttons', /^Pay (?:at PayPal|\$\d+\.\d{2} with PayPal)$/.test(await paypalButton.innerText()) && await paypalButton.isEnabled() && await paypalButton.getAttribute('aria-busy') === null)
+      const returnId = await paypalReturnPage.evaluate(() => Object.keys(sessionStorage).find(key => key.startsWith('gift-scout-owner:')).slice('gift-scout-owner:'.length))
+      // The cancel URL returns to this saved conversation in the owning tab.
+      await paypalReturnPage.goto(`${BASE}/s/${returnId}`)
+      const resume = paypalReturnPage.locator('[data-resume]')
+      await resume.waitFor({ state: 'visible', timeout: 15000 })
+      check('the owner can resume the unpaid order after cancellation', await resume.innerText() === 'Resume payment')
+      const visitor = await browser.newContext()
+      try {
+        const shared = await visitor.newPage()
+        await shared.goto(`${BASE}/s/${returnId}`)
+        await shared.locator('.start-own').waitFor()
+        check('share visitors cannot resume another person’s payment', await shared.locator('[data-resume], [data-pay], [data-buy]').count() === 0)
+      } finally { await visitor.close() }
+      const approvalRequest = paypalReturnPage.waitForRequest(request => {
+        const url = request.url()
+        return request.isNavigationRequest() && /paypal\.com/.test(new URL(url).hostname) && (url.includes('token=') || url.includes('checkoutnow'))
+      }, { timeout: 60000 })
+      await resume.click()
+      const approval = await approvalRequest
+      check('resuming returns the existing approval link', approval.isNavigationRequest() && /token=|checkoutnow/.test(approval.url()))
+      const conversationResponse = await fetch(`${BASE}/api/conversation/${returnId}`)
+      const { turns } = await conversationResponse.json()
+      const orderIds = [...new Set(turns.flat().filter(event => event.t === 'order').map(event => event.order_id))]
+      check('resuming keeps one order', orderIds.length === 1)
+    } finally {
+      await paypalReturnContext.close()
+    }
     check('no script error on any page', errors.length === 0, errors.join(' | '))
   } catch (e) {
     check('the run reached its end', false, String(e).split('\n')[0])
