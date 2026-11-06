@@ -95,7 +95,7 @@ The model writes the gift and the sentence. Code does the rest:
 Safety:
 
 - Only the tab that started a conversation can buy or compare from it. A signed token stays in that tab.
-- Each AI call first holds 73 neurons of room under both caps, then the row takes the call's real cost.
+- Each AI call first holds 135 neurons of room under both caps, then the row takes the call's real cost.
 - A card already paid for is not bought again. There is one open order per card.
 - The PayPal webhook is verified and size limited. It records one paid row per order and checks the amount to the cent.
 - A Qloo or PayPal failure is never saved as an answer.
@@ -156,7 +156,7 @@ node tools/e2e.mjs        # the play through against the local Worker
 To deploy, set the Qloo, session and PayPal values above with `npx wrangler secret put`. Set the product search key
 with `npx wrangler secret put CHANNEL3_API_KEY` and set `CHANNEL3` to `on` as a plain variable. Product search is off
 unless both are set. For the optional pass, run `npx wrangler secret put JUDGE_PASS`. Apply the migrations with
-`--remote`, then run `npx wrangler deploy`. The LEDGER binding in `wrangler.jsonc` points at a shared database that counts model use across
+`--remote`, then run `npm run deploy`. This checks that the model is not planned to go away before deploying. The LEDGER binding in `wrangler.jsonc` points at a shared database that counts model use across
 apps on one account; point it at your own database or remove it, and the app counts in its own database.
 
 ## Limits that keep it free
@@ -172,8 +172,8 @@ The optional judge pass opens `/judge?pass=...` and sets a signed cookie for 30 
 with the people testing it. Never put it in the repo. During the November and December access windows, public use
 stops with 1,000 neurons, 300 Qloo calls and 50 Channel3 calls left for pass holders. These use the same counters.
 The December window runs from 1 Dec 00:00 Eastern through 15 Dec 2026. The app share is 3,500 neurons a day, under
-the shared account cap of 9,500 and the free 10,000. About 120 neurons for a first turn leaves about eight first
-turns in the reserved room. Pass holders still have daily caps: 40 turns, 20 buys, 10 compares, 600 Qloo calls and
+the shared account cap of 9,500 and the free 10,000. About 100 neurons for a first turn leaves about 10 first
+turns (about 2 at the most) in the reserved room. Pass holders still have daily caps: 40 turns, 20 buys, 10 compares, 600 Qloo calls and
 120 Channel3 calls. Outside the access windows everyone shares the normal caps.
 
 The replay data is not in this repository because Qloo's terms keep its answers out of public repositories. To make the three examples replay on your own deploy, run `tools/record_samples.py` and then `tools/seed_replay.py`.

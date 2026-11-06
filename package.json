@@ -7,7 +7,9 @@
   "scripts": {
     "check": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
     "test": "vitest run",
-    "gate": "npm run check && vitest run"
+    "gate": "npm run check && vitest run",
+    "model-check": "node tools/model_check.mjs",
+    "deploy": "node tools/model_check.mjs && wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261019.1",

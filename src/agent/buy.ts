@@ -295,7 +295,8 @@ async function runBuyTurnLocked(o: BuyOptions, pending?: BuyState): Promise<BuyS
       break
     }
     let reply
-    try { reply = await o.model.chat(messages, [spec], 200) } catch {
+    try { reply = await o.model.chat(messages, [spec], 200) } catch (error) {
+      console.error('model call failed', error instanceof Error ? error.message : String(error))
       await o.emit({ t: 'error', text: 'The model did not answer. Try again in a minute.' })
       break
     }

@@ -225,6 +225,22 @@ describe('a first turn: plan, then present', () => {
     expect(events.filter((e) => e.t === 'say').every((e) => e.t !== 'say' || !e.text.includes(bare))).toBe(true)
   })
 
+  it('emits cards when the present step returns only its arguments as JSON text', async () => {
+    const bare = JSON.stringify({ ideas: {
+      brand: [card('B-FENDER', 'A Fender strap')], book: [card('K-HOMESICK', 'A copy of Homesick')],
+      podcast: [card('P-SONG', 'Song Exploder merch')], destination: [card('D-SEOUL', 'A trip to Seoul')],
+      place: [card('L-NAMOO', 'Dinner at Cafe Namoo')],
+    } })
+    let calls = 0
+    const model: Model = { name: 'argument only reply', async chat(_messages, tools) {
+      if (calls++ === 0) return reply([call('plan_scout', PLAN)])
+      return readReply({ choices: [{ message: { content: bare } }] }, tools.map((tool) => tool.function.name))
+    } }
+    const { events } = await turn(model)
+    expect(events.find((e) => e.t === 'cards')).toBeDefined()
+    expect(events.filter((e) => e.t === 'say').every((e) => e.t !== 'say' || !e.text.includes(bare))).toBe(true)
+  })
+
   it('leaves out a city they never named, and asks no place', async () => {
     const model = scripted([
       reply([call('plan_scout', { loves: [{ name: 'Phoebe Bridgers', kind: 'named' }], city: 'New York' })]),
@@ -558,6 +574,33 @@ describe('reading the model', () => {
     const r = readReply({ choices: [{ message: { content: '```json\n' + bare + '\n```', tool_calls: [] } }] }, ['present_gifts'])
     expect(r.tool_calls).toHaveLength(1)
     expect(r.tool_calls[0].function.name).toBe('present_gifts')
+    expect(r.content).toBe('')
+  })
+
+  it('reads bare present_gifts arguments as a call only when offered', () => {
+    const args = { ideas: {
+      brand: [{ entity_id: 'B-TALISKER', gift: 'A bottle of Talisker single malt', why: 'A smoky single malt for a fan of spy novels', price_low: 25, price_high: 30 }],
+      book: [{ entity_id: 'K-FALLEN', gift: 'A copy of Fallen Angel', why: 'A gripping thriller with covert intrigue', price_low: 15, price_high: 20 }],
+    } }
+    const bare = JSON.stringify(args)
+    for (const content of [bare, '```json\n' + bare + '\n```', bare.slice(0, -1)]) {
+      const r = readReply({ choices: [{ message: { content } }] }, ['present_gifts'])
+      expect(r.tool_calls).toHaveLength(1)
+      expect(r.tool_calls[0]).toEqual({ id: 'text_0', type: 'function', function: { name: 'present_gifts', arguments: bare } })
+      expect(JSON.parse(r.tool_calls[0].function.arguments)).toEqual(args)
+      expect(r.content).toBe('')
+    }
+    const notOffered = readReply({ choices: [{ message: { content: bare } }] }, ['search_entities'])
+    expect(notOffered.tool_calls).toEqual([])
+    expect(notOffered.content).toBe(bare)
+    const existing = JSON.stringify({ name: 'present_gifts', arguments: args })
+    expect(readReply({ choices: [{ message: { content: existing } }] }, ['present_gifts']).tool_calls[0].function.name).toBe('present_gifts')
+  })
+
+  it('reads bare present_gifts arguments from reasoning', () => {
+    const args = { cards: [{ entity_id: 'x', gift: 'A book' }] }
+    const r = readReply({ choices: [{ message: { content: null, reasoning: JSON.stringify(args) } }] }, ['present_gifts'])
+    expect(r.tool_calls).toEqual([{ id: 'text_0', type: 'function', function: { name: 'present_gifts', arguments: JSON.stringify(args) } }])
     expect(r.content).toBe('')
   })
 

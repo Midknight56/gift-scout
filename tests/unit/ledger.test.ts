@@ -8,7 +8,7 @@ afterEach(() => { for (const db of databases.splice(0)) db.close() })
 function ledger(opts: { app?: string; dailyCap?: number; accountCap?: number; reserve?: number; day?: string } = {}) {
   const db = new FakeD1()
   databases.push(db)
-  return { db, value: new NeuronLedger(db, { app: opts.app ?? 'gift-scout', dailyCap: opts.dailyCap ?? 100, accountCap: opts.accountCap ?? 200, reserve: opts.reserve, day: () => opts.day ?? '2026-10-23' }) }
+  return { db, value: new NeuronLedger(db, { app: opts.app ?? 'gift-scout', dailyCap: opts.dailyCap ?? 100, accountCap: opts.accountCap ?? 200, reserve: opts.reserve ?? 1, day: () => opts.day ?? '2026-10-23' }) }
 }
 
 describe('NeuronLedger', () => {

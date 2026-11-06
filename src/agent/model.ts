@@ -25,12 +25,13 @@ export interface Model {
   chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number): Promise<ModelReply>
 }
 
-// Prices read 22 Oct 2026 from developers.cloudflare.com/workers-ai/platform/pricing: @cf/qwen/qwen3-30b-a3b-fp8 costs
-// 4,625 neurons per million input tokens and 30,475 per million output tokens. Its page lists function calling: yes,
-// context window 32,768 tokens.
-export const MODEL = '@cf/qwen/qwen3-30b-a3b-fp8'
-export const NEURONS_PER_INPUT_TOKEN = 4625 / 1e6
-export const NEURONS_PER_OUTPUT_TOKEN = 30475 / 1e6
+// Prices read 6 Nov 2026 from developers.cloudflare.com/workers-ai/platform/pricing: @cf/openai/gpt-oss-20b costs
+// $0.200 per million input tokens and $0.300 per million output tokens, or 18,182 and 27,273 neurons. The old model's
+// page says it is planned to go away on 20 Nov 2026. The daily caps in src/limits.ts are unchanged (2,000 a day, 3,500
+// in judging windows, 9,500 for the whole account), under the free 10,000 neurons a day, so usage costs $0.
+export const MODEL = '@cf/openai/gpt-oss-20b'
+export const NEURONS_PER_INPUT_TOKEN = 18182 / 1e6
+export const NEURONS_PER_OUTPUT_TOKEN = 27273 / 1e6
 
 export function neuronsFor(promptTokens: number, completionTokens: number): number {
   return promptTokens * NEURONS_PER_INPUT_TOKEN + completionTokens * NEURONS_PER_OUTPUT_TOKEN
@@ -69,8 +70,30 @@ function bareTextToolCall(text: string, offered?: string[]): { call: ToolCall; c
   return undefined
 }
 
-/** Calls the model wrote as text, `<tool_call>{"name": ..., "arguments": {...}}</tool_call>`. Measured 23 Oct 2026: with
- *  thinking off, Workers AI returned qwen3's tool calls this way inside `reasoning`, and `tool_calls` was empty. */
+/** A present_gifts argument object some models return without the outer tool call wrapper. */
+function barePresentGifts(text: string, offered?: string[]): { call: ToolCall; content: string } | undefined {
+  if (!offered?.includes('present_gifts')) return undefined
+  const cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
+  const start = cleaned.indexOf('{')
+  const close = cleaned.lastIndexOf('}')
+  if (start < 0) return undefined
+  const end = close >= start ? close + 1 : cleaned.length
+  const json = cleaned.slice(start, end)
+  for (let extra = 0; extra <= 2; extra++) {
+    try {
+      const value = JSON.parse(json + '}'.repeat(extra)) as Record<string, unknown>
+      if (!value || typeof value !== 'object' || Array.isArray(value) || 'name' in value || (!('ideas' in value) && !('cards' in value))) continue
+      return {
+        call: { id: 'text_0', type: 'function', function: { name: 'present_gifts', arguments: json + '}'.repeat(extra) } },
+        content: (cleaned.slice(0, start) + cleaned.slice(end)).trim(),
+      }
+    } catch { /* a cut off or broken argument object is skipped */ }
+  }
+  return undefined
+}
+
+/** Calls the model wrote as text, `<tool_call>{"name": ..., "arguments": {...}}</tool_call>`. Some models place these
+ *  calls inside `reasoning` while leaving `tool_calls` empty. */
 export function textToolCalls(text: string, offered?: string[]): ToolCall[] {
   const out: ToolCall[] = []
   for (const m of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
@@ -114,8 +137,16 @@ export function readReply(raw: RawReply, offered?: string[], maxTokens?: number)
     const bare = bareTextToolCall(content, offered)
     calls = textToolCalls(content, offered)
     if (bare && calls.length) content = bare.content
+    if (!calls.length) {
+      const present = barePresentGifts(content, offered)
+      if (present) { calls = [present.call]; content = present.content }
+    }
     const reasoning = msg?.reasoning ?? msg?.reasoning_content ?? ''
-    if (!calls.length) calls = textToolCalls(reasoning, offered)
+    if (!calls.length) {
+      const present = barePresentGifts(reasoning, offered)
+      if (present) calls = [present.call]
+      else calls = textToolCalls(reasoning, offered)
+    }
     if (!calls.length && !content.trim()) content = reasoning
   }
   if (calls.length) content = content.replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, '')
@@ -130,7 +161,7 @@ export function readReply(raw: RawReply, offered?: string[], maxTokens?: number)
   return reply
 }
 
-/** Qwen3 may wrap its reasoning in <think> tags inside the content; the person never sees it. */
+/** Some models wrap their reasoning in <think> tags inside the content; the person never sees it. */
 export function stripThinking(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*<\/think>/, '').trim()
 }
@@ -143,9 +174,7 @@ export class WorkersAiModel implements Model {
   constructor(private ai: AiBinding, private timeoutMs = 45_000) {}
 
   async chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number): Promise<ModelReply> {
-    // Thinking is off. Measured 23 Oct 2026 on the same first message: with it on, 4 model calls took 129 neurons and
-    // 22 s; with it off, one call took 10.5 neurons and about 2 s.
-    const input = { messages, ...(tools.length ? { tools } : {}), max_tokens: maxTokens, temperature: 0.3, chat_template_kwargs: { enable_thinking: false } }
+    const input = { messages, ...(tools.length ? { tools } : {}), max_tokens: maxTokens, temperature: 0.3 }
     let timer: ReturnType<typeof setTimeout> | undefined
     let raw: unknown
     try {

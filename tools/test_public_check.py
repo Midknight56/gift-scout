@@ -11,6 +11,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 KEY = "hack_0123456789abcdef0123456789abcdef"
 # Made up, and joined at run time so this file does not trip the check it tests once it is committed.
 QLOO_ID = "-".join(("ABCDEF12", "3456", "4789", "8ABC", "DEF012345678"))
+VENDOR = "open" + "ai"
 
 
 def load(root):
@@ -63,6 +64,18 @@ def main():
             ("clean repo", {"README.md": "Plain words.\n"}, empty, 0),
             ("Qloo id in tracked file", {"data.json": '{"id": "' + QLOO_ID + '"}\n'}, empty, 1),
             ("samples folder", {"samples/runs.json": "{}\n"}, empty, 1),
+            (
+                "allowed Workers AI model path",
+                {"model.ts": "export const MODEL = '@cf/" + VENDOR + "/gpt-oss-20b'\n"},
+                empty,
+                0,
+            ),
+            (
+                "vendor word in tracked comment",
+                {"model.ts": "// " + VENDOR + "\n"},
+                empty,
+                1,
+            ),
             ("bare key in history", {"notes.txt": KEY + "\n"}, bare_secrets, 1),
             ("labelled key in history", {"notes.txt": "QLOO_API_KEY=" + KEY + "\n"}, labelled_secrets, 1),
         )
@@ -71,6 +84,14 @@ def main():
             ok = got == want
             failed += not ok
             print(f"{'ok  ' if ok else 'BAD '} {name}: exit {got}, want {want}")
+        message_repo = repo(parent, "message-case", {"README.md": "Plain words.\n"})
+        git = lambda *args: subprocess.run(
+            ["git", *args], cwd=message_repo, capture_output=True, check=True
+        )
+        git("commit", "--allow-empty", "-q", "-m", "vendor " + VENDOR)
+        message_ok = run(message_repo, empty) == 1
+        failed += not message_ok
+        print(f"{'ok  ' if message_ok else 'BAD '} vendor word in commit message: exit {1 if message_ok else 0}, want 1")
     print("ALL CASES OK" if not failed else f"{failed} CASES WRONG")
     return 1 if failed else 0
 

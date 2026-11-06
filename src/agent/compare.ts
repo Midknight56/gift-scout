@@ -83,7 +83,8 @@ export async function runCompare(o: {
   }
   let reply
   try { reply = await o.model.chat([{ role: 'system', content: prompt }, { role: 'user', content: o.message }], [], 900) }
-  catch {
+  catch (error) {
+    console.error('model call failed', error instanceof Error ? error.message : String(error))
     await o.emit({ t: 'error', text: 'The model did not answer. Try again in a minute.' })
     return
   }

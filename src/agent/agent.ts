@@ -32,8 +32,8 @@ export const MAX_TOOL_CALLS = 14
 // Measured 26 Oct 2026: a full present_gifts answer for "Frida Kahlo and Mexican food" was cut at 900 tokens, 2,359
 // characters, about 2.6 a token (the ids are long), and the turn ended with no cards. 1,400 gives that answer about
 // half again as much room. A call at the cap: the largest present step input in the ledger that day was about 5,300
-// tokens (a 52 neuron call), 5,300 x 4,625 / 1e6 = 24.5, plus 1,400 x 30,475 / 1e6 = 42.7, is 67.2, under the 73
-// neuron reserve (MAX_CALL_NEURONS). 1,600 would be 73.3, over it. The daily caps still stop all spending, so $0.
+// tokens, 1,400 x 27,273 per million = 38.2 neurons and the capped call total is 134.6. The daily caps still stop all
+// spending, so $0.
 export const MAX_OUTPUT_TOKENS = 1400
 
 export interface ConversationState {
@@ -516,7 +516,8 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
     let reply
     try {
       reply = await o.model.chat(messages, allSpecs.filter((t) => offered.includes(t.function.name)), MAX_OUTPUT_TOKENS)
-    } catch {
+    } catch (error) {
+      console.error('model call failed', error instanceof Error ? error.message : String(error))
       modelFailed = true
       break
     }

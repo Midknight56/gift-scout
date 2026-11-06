@@ -35,6 +35,14 @@ def _scan_expression():
     )
 
 
+def _without_allowed(line):
+    vendor = "open" + "ai"
+    allowed_model = re.compile(
+        r"@cf/" + re.escape(vendor) + r"/[A-Za-z0-9._-]+", re.IGNORECASE
+    )
+    return allowed_model.sub("", line)
+
+
 def _git(*args):
     result = subprocess.run(
         ["git", *args],
@@ -48,7 +56,9 @@ def _git(*args):
 
 def _count_matching_lines(expression, text):
     return sum(
-        1 for line in text.splitlines() if re.search(expression, line, flags=re.IGNORECASE)
+        1
+        for line in text.splitlines()
+        if re.search(expression, _without_allowed(line), flags=re.IGNORECASE)
     )
 
 
@@ -161,14 +171,22 @@ def main():
     )
     checks.append(("commit_paths", path_count))
 
-    grep_output = _git("grep", "-ciE", expression, "--", ".")
-    checks.append(("tree", sum(1 for line in grep_output.splitlines() if line)))
+    grep_output = _git("grep", "-niE", expression, "--", ".")
+    tree_files = set()
+    for line in grep_output.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) == 3 and re.search(
+            expression, _without_allowed(parts[2]), flags=re.IGNORECASE
+        ):
+            tree_files.add(parts[0])
+    checks.append(("tree", len(tree_files)))
 
     patch_text = _git("log", "--all", "-p")
     diff_count = sum(
         1
         for line in patch_text.splitlines()
-        if line.startswith(("+", "-")) and re.search(expression, line, re.IGNORECASE)
+        if line.startswith(("+", "-"))
+        and re.search(expression, _without_allowed(line), re.IGNORECASE)
     )
     checks.append(("diff_lines", diff_count))
 

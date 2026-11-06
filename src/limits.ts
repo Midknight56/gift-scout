@@ -36,9 +36,9 @@ export function perVisitor(normal: number, now: number = clock.now()): number {
 }
 
 // Workers AI on the Workers Free plan: 10,000 neurons a day for the whole account, shared by the hackathon apps through
-// the ledger. A full first turn was budgeted at about 120 neurons (6 model calls x about 2,500 input tokens x 4,625 per
-// million = 69, plus about 1,500 output tokens x 30,475 per million = 46), so 2,000 a day is about 16 live first turns,
-// and 2,000 of 10,000 is 20% of the free day. The account cap stops every app before the free day is spent.
+// the ledger. A first turn is about 100 neurons and up to about 410 (live, 6 Nov 2026), so 2,000 a day is about 20 live
+// first turns (about 5 at the most), and 2,000 of 10,000 is 20% of the free day. The account cap stops every app before
+// the free day is spent.
 export const DEFAULT_DAILY_NEURONS = 2000
 export const DEFAULT_ACCOUNT_NEURONS = 9500
 // The shares of the apps that use the shared ledger are Circlekeeper 700, Dispute Desk 700, Job Done 2,000, Running Tab
@@ -59,12 +59,12 @@ export function dailyNeuronShare(now: number = clock.now()): number {
   return inWindows(NEURON_WINDOWS, now) ? JUDGING_DAILY_NEURONS : DEFAULT_DAILY_NEURONS
 }
 // The room held in the ledger before each Workers AI call; the row then takes the call's real cost, even when that is
-// more. Measured in the shared ledger: 23 Oct 2026, 42 calls, largest 33.3, mean 21.9; 24 Oct, 65 calls, largest 48.4,
-// mean 29.3. Reserve = the largest x 1.5 = 48.4 x 1.5 = 72.6, rounded up to 73. A call over 73 can pass the cap only by
-// its own excess, and the account cap leaves 500 of the free 10,000 for that.
-export const MAX_CALL_NEURONS = 73
+// more. The reserve is the most one capped call can cost on this model: 5,300 input tokens x 18,182 per million = 96.4
+// plus 1,400 output tokens x 27,273 per million = 38.2, total 134.6, rounded up to 135. A call over the reserve can
+// pass the cap only by its own excess, and the account cap leaves 500 of the free 10,000 for that.
+export const MAX_CALL_NEURONS = 135
 
-/** "Buy this one" taps per visitor a day. Each makes one PayPal sandbox order and costs about 10 neurons. */
+/** "Buy this one" taps per visitor a day. Each makes one PayPal sandbox order and one model call (at most 135 neurons). */
 export const DAILY_BUYS_PER_VISITOR = 6
 /** One model call and up to 12 Qloo calls, cached. */
 export const DAILY_COMPARES_PER_VISITOR = 3
@@ -72,8 +72,8 @@ export const DAILY_COMPARES_PER_VISITOR = 3
 /** The pause between events of a cached or recorded run: a first turn of about 15 events reads in about 3 seconds. */
 export const REPLAY_PACE_MS = 160
 
-// 1,000 neurons at about 120 a first turn leaves about 8 first turns after the public is spent, inside the app's
-// 3,500, inside the account's 9,500, inside the free 10,000.
+// 1,000 neurons at about 100 a first turn leaves about 10 first turns (about 2 at the most) after the public is spent,
+// inside the app's 3,500, inside the account's 9,500, inside the free 10,000.
 export const JUDGE_RESERVE_NEURONS = 1000
 export const JUDGE_RESERVE_QLOO = 300
 export const JUDGE_RESERVE_CHANNEL3 = 50

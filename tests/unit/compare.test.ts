@@ -197,7 +197,7 @@ describe('POST /api/compare', () => {
     ])
     expect(events.map((event) => event.t)).toEqual(['run', 'call', 'result', 'call', 'result', 'call', 'result', 'call', 'result', 'call', 'result', 'compare', 'usage', 'done'])
     const usage = await h.ledger.prepare('SELECT neurons FROM ai_calls').bind().first<{ neurons: number }>()
-    expect(usage?.neurons).toBeCloseTo(1.072)
+    expect(usage?.neurons).toBeCloseTo(2.36366)
   })
 
   it('ends with done and saves the compare event as a conversation turn', async () => {
