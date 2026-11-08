@@ -3,7 +3,7 @@
 // each moment happens, for the editor. Headless (no window), one browser, waits for no one: it refuses to start while
 // another Playwright run is alive on this PC.
 //
-//   node tools/film.mjs [base url] [--pay=paypal|testcard] [--until=narrowed|end]
+//   node tools/film.mjs [base url] [--pay=paypal|testcard] [--until=cards|narrowed|end] [--message=...] [--out=out/film]
 //
 // Writes out/film/take.mp4 (2880 x 1800, the page at 1440 x 900 drawn at 2x) and out/film/beats.json.
 // The take: the empty page, the dad example typed, the Qloo calls and the cards arriving, the panel opened at a card's
@@ -19,11 +19,12 @@ const args = process.argv.slice(2)
 const BASE = (args.find((a) => a.startsWith('http')) ?? 'https://gift-scout.midknight-labs.workers.dev').replace(/\/$/, '')
 const PAY = (args.find((a) => a.startsWith('--pay=')) ?? '--pay=paypal').slice(6)
 // --until=narrowed stops after the narrowed cards: a take that needs no live model call (the purchase does).
+// --until=cards stops after the first cards, scrolled through slowly so each one (and its product) can be read.
 const UNTIL = (args.find((a) => a.startsWith('--until=')) ?? '--until=end').slice(8)
-const OUT = 'out/film'
+const OUT = (args.find((a) => a.startsWith('--out=')) ?? '--out=out/film').slice(6)
 // Absolute: ffmpeg reads the paths in its list relative to the list's own folder (23 Oct: "Impossible to open").
 const FRAMES = resolve(OUT, 'frames')
-const MESSAGE = 'My dad. Le Carre novels and single malt. Christmas.'
+const MESSAGE = (args.find((a) => a.startsWith('--message=')) ?? '--message=My dad. Le Carre novels and single malt. Christmas.').slice(10)
 class StopTake extends Error {}
 
 if (execSync('tasklist /FO CSV /NH', { encoding: 'utf8' }).split('\n').some((l) => /chrome-headless-shell|playwright/i.test(l))) {
@@ -79,9 +80,23 @@ try {
   beat('first Qloo call')
   await page.locator('.gift-card').first().waitFor({ timeout: 120000 })
   beat('first card')
-  await page.locator('.gift-card').nth(4).waitFor({ timeout: 60000 })
+  // A run can keep fewer than six cards (the rest dropped by code), so wait until the count holds for 5 s.
+  for (let seen = -1, still = 0, t = 0; still < 5000 && t < 60000; t += 500) {
+    const n = await page.locator('.gift-card').count()
+    still = n === seen ? still + 500 : 0
+    seen = n
+    await pause(500)
+  }
   await pause(2500)
   beat('cards in')
+  if (UNTIL === 'cards') {
+    for (let i = 0; i < await page.locator('.gift-card').count(); i++) {
+      await page.locator('.gift-card').nth(i).evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }))
+      await pause(2200)
+    }
+    beat('cards shown')
+    throw new StopTake()
+  }
   await page.locator('#chat-scroll').evaluate((el) => el.scrollTo({ top: el.scrollHeight / 3, behavior: 'smooth' }))
   await pause(2500)
   await page.locator('.gift-card .call-link').nth(1).click()
