@@ -159,6 +159,7 @@ function clearSelection() {
   delete walkPanel.dataset.selectedCard;
   walkPanel.querySelectorAll('.is-selected').forEach((el) => el.classList.remove('is-selected'));
   chat.querySelectorAll('.gift-card.is-selected').forEach((el) => el.classList.remove('is-selected'));
+  callsList.querySelectorAll('.call-row.is-selected').forEach((el) => el.classList.remove('is-selected'));
 }
 
 /** Selecting a current card brings its graph links forward and fades the others. */
@@ -169,6 +170,8 @@ function selectCard(cardEl) {
   walkPanel.dataset.selectedCard = index;
   walkPanel.querySelectorAll(`[data-card="${CSS.escape(index)}"]`).forEach((el) => el.classList.add('is-selected'));
   cardEl.classList.add('is-selected');
+  const call = cardEl.querySelector('.call-link')?.getAttribute('data-call');
+  if (call) callsList.querySelector(`[data-call-row="${CSS.escape(call)}"]`)?.classList.add('is-selected');
 }
 
 /** One "Leave out" button per interest behind the current cards, for the owner of a live conversation only. */
