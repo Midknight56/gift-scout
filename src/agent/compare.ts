@@ -9,6 +9,11 @@ export const COMPARE_KINDS = ['brand', 'book', 'artist', 'podcast', 'destination
 export type CompareKind = (typeof COMPARE_KINDS)[number]
 export interface PlainIdea { gift: string; name: string; kind: CompareKind; lookup_name?: string }
 
+// worst case 166 input tokens x 18,182 per million + 1,500 output x 27,273 per million = about 44 neurons,
+// under MAX_CALL_NEURONS 135 (src/limits.ts), and the daily caps in src/limits.ts stay under the free
+// 10,000 neurons a day, so a compare still costs $0.
+export const COMPARE_MAX_TOKENS = 1500
+
 const prompt = 'Give six gift ideas based on what the person says. Return only a JSON array in this exact shape: [{ "gift": "...", "name": "the brand, book, artist, podcast or place to give", "kind": "brand|book|artist|podcast|destination|place" }]. Use six ideas or fewer if needed. Use plain words.'
 
 export function parsePlainIdeas(value: string): PlainIdea[] | null {
@@ -82,8 +87,14 @@ export async function runCompare(o: {
     return
   }
   let reply
-  try { reply = await o.model.chat([{ role: 'system', content: prompt }, { role: 'user', content: o.message }], [], 900) }
-  catch (error) {
+  try {
+    reply = await o.model.chat(
+      [{ role: 'system', content: prompt }, { role: 'user', content: o.message }],
+      [],
+      COMPARE_MAX_TOKENS,
+      { reasoningEffort: 'low' },
+    )
+  } catch (error) {
     console.error('model call failed', error instanceof Error ? error.message : String(error))
     await o.emit({ t: 'error', text: 'The model did not answer. Try again in a minute.' })
     return
@@ -91,7 +102,8 @@ export async function runCompare(o: {
   const spent = reply.neurons ?? neuronsFor(reply.prompt_tokens, reply.completion_tokens)
   await held.settle(spent)
   const ideas = parsePlainIdeas(reply.content)
-  if (!ideas) {
+  if (reply.cut || !ideas) {
+    console.error('compare reply cut', reply.cut ? 'length' : 'stop', 'content length', reply.content.length)
     await o.emit({ t: 'error', text: 'The model did not give gift ideas in the right shape.' })
     return
   }

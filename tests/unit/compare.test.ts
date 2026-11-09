@@ -5,7 +5,7 @@ vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }))
 
 import worker, { type Env } from '../../src/worker'
 import { newState } from '../../src/agent/agent'
-import { firstTurnContexts, runCompare } from '../../src/agent/compare'
+import { COMPARE_MAX_TOKENS, firstTurnContexts, runCompare } from '../../src/agent/compare'
 import type { Model } from '../../src/agent/model'
 import type { ScoutEvent } from '../../src/agent/events'
 import { ownerToken } from '../../src/app/buy'
@@ -180,6 +180,23 @@ describe('POST /api/compare', () => {
     expect((await ledger.spentToday()).all).toBeLessThanOrEqual(50)
   })
 
+  it('passes reasoningEffort low and COMPARE_MAX_TOKENS to the model', async () => {
+    let seenMaxTokens: number | undefined
+    let seenOptions: unknown
+    const model: Model = {
+      name: 'spy',
+      async chat(_messages, _tools, maxTokens, options) {
+        seenMaxTokens = maxTokens
+        seenOptions = options
+        return { content: '[]', tool_calls: [], prompt_tokens: 1, completion_tokens: 1 }
+      },
+    }
+    const ledger = { reserve: async () => ({ settle: async () => {} }) } as unknown as import('../../src/agent/agent').Budget
+    await runCompare({ message: 'compare these', turns: [], cards: [], qloo: {} as never, model, budget: ledger, emit: async () => {} })
+    expect(seenMaxTokens).toBe(COMPARE_MAX_TOKENS)
+    expect(seenOptions).toEqual({ reasoningEffort: 'low' })
+  })
+
   it('scores found ideas and marks a missing idea without a score', async () => {
     const h = setup()
     const { events } = await request(h, await ownerToken(h.id, 'test'))
@@ -213,6 +230,22 @@ describe('POST /api/compare', () => {
     const h = setup({ reply: { response: 'Here are some lovely ideas.', usage: { prompt_tokens: 10, completion_tokens: 10 } } })
     const { events } = await request(h, await ownerToken(h.id, 'test'))
     expect(events.filter((event) => event.t === 'error')).toEqual([{ t: 'error', text: 'The model did not give gift ideas in the right shape.' }])
+    expect(events.at(-1)).toMatchObject({ t: 'done' })
+    expect(h.qlooCalls).toBe(0)
+  })
+
+  it('returns one plain error without crashing when raw reply is cut off mid reasoning', async () => {
+    const longReasoning = '1. A nice brand '.repeat(200)
+    const reply = {
+      choices: [{ finish_reason: 'length', message: { content: '', reasoning: longReasoning } }],
+      usage: { prompt_tokens: 50, completion_tokens: 1500 },
+    }
+    const h = setup({ reply })
+    const { events } = await request(h, await ownerToken(h.id, 'test'))
+    expect(events.filter((event) => event.t === 'error')).toEqual([{
+      t: 'error',
+      text: 'The model did not give gift ideas in the right shape.',
+    }])
     expect(events.at(-1)).toMatchObject({ t: 'done' })
     expect(h.qlooCalls).toBe(0)
   })

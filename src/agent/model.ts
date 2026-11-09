@@ -20,9 +20,13 @@ export interface ModelReply {
   neurons?: number
 }
 
+export interface ModelChatOptions {
+  reasoningEffort?: 'low' | 'medium' | 'high'
+}
+
 export interface Model {
   readonly name: string
-  chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number): Promise<ModelReply>
+  chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number, options?: ModelChatOptions): Promise<ModelReply>
 }
 
 // Prices read 6 Nov 2026 from developers.cloudflare.com/workers-ai/platform/pricing: @cf/openai/gpt-oss-20b costs
@@ -173,8 +177,14 @@ export class WorkersAiModel implements Model {
   readonly name = MODEL
   constructor(private ai: AiBinding, private timeoutMs = 45_000) {}
 
-  async chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number): Promise<ModelReply> {
-    const input = { messages, ...(tools.length ? { tools } : {}), max_tokens: maxTokens, temperature: 0.3 }
+  async chat(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number, options?: ModelChatOptions): Promise<ModelReply> {
+    const input = {
+      messages,
+      ...(tools.length ? { tools } : {}),
+      max_tokens: maxTokens,
+      temperature: 0.3,
+      ...(options?.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+    }
     let timer: ReturnType<typeof setTimeout> | undefined
     let raw: unknown
     try {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { deprecationIn } from '../../tools/model_check.mjs'
 import { MAX_OUTPUT_TOKENS } from '../../src/agent/agent'
-import { MODEL, neuronsFor } from '../../src/agent/model'
+import { MODEL, neuronsFor, WorkersAiModel, type AiBinding } from '../../src/agent/model'
 import { MAX_CALL_NEURONS } from '../../src/limits'
 
 describe('Workers AI model check', () => {
@@ -19,5 +19,20 @@ describe('Workers AI model check', () => {
 
   it('reserves enough for one capped model call', () => {
     expect(MAX_CALL_NEURONS).toBeGreaterThanOrEqual(neuronsFor(5300, MAX_OUTPUT_TOKENS))
+  })
+
+  it('puts reasoning_effort in the input when asked and leaves it out when not', async () => {
+    const inputs: unknown[] = []
+    const ai: AiBinding = {
+      run: async (_model, input) => {
+        inputs.push(input)
+        return { response: 'ok' }
+      },
+    }
+    const model = new WorkersAiModel(ai)
+    await model.chat([{ role: 'user', content: 'hello' }], [], 100, { reasoningEffort: 'low' })
+    await model.chat([{ role: 'user', content: 'hello' }], [], 100)
+    expect(inputs[0]).toMatchObject({ reasoning_effort: 'low', max_tokens: 100 })
+    expect(Object.hasOwn(inputs[1] as object, 'reasoning_effort')).toBe(false)
   })
 })
