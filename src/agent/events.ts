@@ -26,6 +26,7 @@ export interface CardProduct {
   match?: 'exact title' | 'title starts with the name' | 'brand is the name' | 'title names it'
   title: string
   brand?: string
+  merchant?: string
   price: number
   url: string
   image?: string

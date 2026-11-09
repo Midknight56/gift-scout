@@ -191,3 +191,13 @@ describe('usable offers and fresh product details', () => {
     expect(fetcher).not.toHaveBeenCalled()
   })
 })
+
+describe('the shop behind an offer', () => {
+  it('keeps the offer domain as the merchant, not the redirect link host', async () => {
+    const raw = product({ offers: [{ url: 'https://buy.trychannel3.com/abc?o=1', domain: 'barnesandnoble.com', price: { price: 9.99, currency: 'USD' } }] })
+    const fetcher = vi.fn(async () => response({ products: [raw] }))
+    const client = new Channel3Client('key', fetcher as unknown as typeof fetch, new MemoryCache(), async () => true)
+    const result = await client.search('Fallen Angel book')
+    expect(result.ok && result.products[0].merchant).toBe('barnesandnoble.com')
+  })
+})

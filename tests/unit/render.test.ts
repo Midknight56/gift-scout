@@ -636,3 +636,14 @@ describe('offer and idea cards', () => {
     expect(merchantHost(undefined)).toBe('');
   });
 });
+
+describe('merchant name on a listing', () => {
+  const card = { id: 'm1', gift: 'Fallen Angel', why: 'Why', price_low: 5, price_high: 20, entity: { name: 'Fallen Angel', affinity: 0.9 }, seeds: [], from_call: 1,
+    product: { title: 'Fallen Angel', price: 9.99, url: 'https://buy.trychannel3.com/abc?o=1', merchant: 'barnesandnoble.com', source: 'channel3' } };
+  it('shows the shop from the offer, not the redirect host', () => {
+    const html = cardHtml(card, { buyable: true });
+    expect(html).toContain('<span class="product-merchant">barnesandnoble.com</span>');
+    expect(html).not.toContain('trychannel3.com</span>');
+    expect(payCopy(card).note).toContain('from barnesandnoble.com.');
+  });
+});

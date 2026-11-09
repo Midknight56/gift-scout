@@ -7,6 +7,8 @@ export interface GiftProduct {
   id: string
   title: string
   brand?: string
+  /** The shop's own domain from the offer (the url is a redirect link). */
+  merchant?: string
   price: number
   currency: string
   url: string
@@ -29,7 +31,7 @@ interface RawProduct {
   title?: unknown
   brands?: { name?: unknown }[]
   images?: { url?: unknown; cleaned_url?: unknown }[]
-  offers?: { availability?: unknown; condition?: unknown; url?: unknown; price?: { price?: unknown; currency?: unknown } | null }[]
+  offers?: { availability?: unknown; condition?: unknown; url?: unknown; domain?: unknown; price?: { price?: unknown; currency?: unknown } | null }[]
   category?: { slug?: unknown; title?: unknown; path?: { slug?: unknown; title?: unknown }[] } | null
 }
 
@@ -51,6 +53,7 @@ function mapProduct(raw: RawProduct): GiftProduct | null {
     currency: offer.price.currency as string,
     url: offer.url,
   }
+  if (typeof offer.domain === 'string' && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(offer.domain)) product.merchant = offer.domain.toLowerCase().replace(/^www\./, '')
   if (offer.availability === 'InStock') product.availability = offer.availability
   if (offer.condition === 'new') product.condition = offer.condition
   const brand = raw.brands?.[0]?.name

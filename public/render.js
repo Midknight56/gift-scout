@@ -118,7 +118,7 @@ export function cardHtml(card, { buyable = false } = {}) {
     const safeUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' ? url.href : ''; } catch { return ''; } };
     const image = safeUrl(item.image ?? '');
     const url = safeUrl(item.url ?? '');
-    const host = merchantHost(item.url);
+    const host = item.merchant ? String(item.merchant) : merchantHost(item.url);
     product = `<div class="product-block">${image ? `<img class="product-image" src="${escapeHtml(image)}" alt="${escapeHtml(plainName(item.title))}" width="64" height="64" loading="lazy">` : ''}<div class="product-details"><strong class="product-title">${escapeHtml(plainName(item.title))}</strong>${item.brand ? `<span class="product-brand">${escapeHtml(plainName(item.brand))}</span>` : ''}${host ? `<span class="product-merchant">${escapeHtml(host)}</span>` : ''}<span class="product-price">$${Number(item.price).toFixed(2)}</span>${url ? `<a class="product-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow">See it</a>` : ''}<span class="product-credit">Found by Channel3</span></div></div>`;
   }
   return `<article class="gift-card" style="--index:0">${kind}<div class="card-top"><h3 class="gift-name">${gift}</h3><span class="price">${price}</span></div>${product}<div class="because"><span class="because-seeds">${becauseSeeds}</span><span class="because-arrow" aria-hidden="true">→</span><span class="because-entity">${entity}</span><span class="affinity" role="img" aria-label="Qloo affinity ${score} of 1" title="${escapeHtml(affinityTitle)}"><span class="affinity-track"><span class="affinity-fill" style="width:${width}%"></span></span><span class="affinity-label">affinity</span><span>${score}</span></span><a class="call-link" href="#call-${Number.isFinite(call) ? call : 0}" data-call="${Number.isFinite(call) ? call : 0}">call ${Number.isFinite(call) ? call : 0}</a></div><details class="why-more"><summary>Why this one</summary><p class="gift-why">${why}</p></details>${buyable ? `<div class="card-actions"><button type="button" class="buy-button" data-buy="${escapeHtml(card.id)}">${buyText}</button><p class="pay-disclosure">Sandbox checkout. No store order is placed. Nothing ships.</p></div>` : ''}</article>`;
@@ -376,7 +376,7 @@ export function quoteFor(card) {
 
 export function payCopy(card) {
   const price = Number(card?.product ? card.product.price : quoteFor(card)).toFixed(2);
-  const host = card?.product ? merchantHost(card.product.url) : '';
+  const host = card?.product ? (card.product.merchant ? String(card.product.merchant) : merchantHost(card.product.url)) : '';
   const fromHost = host ? ` from ${host}` : '';
   const note = card?.product
     ? `Paying $${price} for ${card.product.title}${fromHost}. PayPal sandbox. No store order is placed. Nothing ships.`

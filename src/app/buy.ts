@@ -201,7 +201,7 @@ function offerChanged(card: string, product: CardProduct, old?: OfferSnapshot): 
   if (!old || shopHost(old.url) !== shopHost(product.url)) changes.push('shop')
   else if (old.id !== product.id || !offerIdentity(old.url) || offerIdentity(old.url) !== offerIdentity(product.url)) changes.push('offer')
   return { t: 'offer_changed', card, title: product.title, old_price: old?.price ?? 0, new_price: product.price,
-    changes, old_title: old?.title, new_title: product.title, shop: shopHost(product.url), product }
+    changes, old_title: old?.title, new_title: product.title, shop: product.merchant ?? shopHost(product.url), product }
 }
 
 export async function parseBuy(request: Request): Promise<{ conversation: string; card: string; method: PayMethod; owner?: string; ship?: Shipping; offer?: OfferSnapshot; quote?: number } | null> {
