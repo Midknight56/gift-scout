@@ -1,8 +1,8 @@
 # Gift Scout
 
 Gift Scout finds a gift from what a person already loves. Tell it who the gift is for and a few things they love. It
-asks Qloo's taste graph what the same audience loves, kind by kind, and comes back with six gift ideas. Each idea
-shows Qloo's split of which favourite pulled it in. Then you can narrow it down, share it, and buy one in the PayPal
+asks Qloo's taste graph what the same audience loves, kind by kind, and comes back with up to six gift ideas. Where
+Qloo returns a split, each idea shows which favourite pulled it in. Then you can narrow it down, share it, and buy one in the PayPal
 sandbox.
 
 Try it: https://gift-scout.midknight-labs.workers.dev
@@ -11,12 +11,15 @@ Try it: https://gift-scout.midknight-labs.workers.dev
 
 1. Open https://gift-scout.midknight-labs.workers.dev and tap the example "My dad. Le Carre novels and single malt.
    Christmas." (or write your own person).
-2. Watch "Behind the scenes" on the right fill with every Qloo call as it runs. Each of the six cards shows the Qloo
-   result it rests on and Qloo's split of which love pulled it in.
-3. Tap "Compare with Qloo off" under the cards: the same model with no Qloo, its ideas scored against the same loves.
+2. Watch "Behind the scenes" on the right fill with every Qloo call as it runs. Each card shows the Qloo result it
+   rests on and, where Qloo returns one, its split of which love pulled it in. A card says "Store listing" when a
+   real product was found and "Gift idea" with an estimated price when not.
+3. Tap "Compare with Qloo off" under the cards: the same model with no Qloo, its ideas scored against the same loves,
+   next to Gift Scout's own picks for the first request.
+4. Tap "Leave out" beside an interest in "Behind the scenes": the cards that rested on it are withdrawn and named.
 
-Then "Buy this one" pays for a card in the PayPal sandbox, with the sandbox buyer below or PayPal's test card and no
-login. Nothing here costs real money.
+Then "Buy this one" (or "Try a sandbox payment" on a gift idea) makes a PayPal sandbox payment for a card, with the sandbox buyer below or PayPal's test card and no
+login. No store order is placed and nothing ships. Nothing here costs real money.
 
 Built for this contest: work began on 22 Oct 2026. Everything in this repo was written after 1 Oct.
 
@@ -62,9 +65,10 @@ on the left to the Qloo results the cards rest on at the right. Line weight foll
 
 "Compare with Qloo off" uses the same message with the same Workers AI model and no tools. Each suggestion is looked
 up in Qloo and scored against the same favourites with `filter.results.entities`, or marked "not found in Qloo". The
-page shows both means side by side. There is one comparison per conversation and three per day per visitor (12 from 2
-to 5 Nov, for judging). Only the
-tab that started the conversation can compare it.
+page shows Gift Scout's picks and the plain model's picks side by side. Scores on the same signals and on the
+nearest signals are shown apart, because a mixed mean is not a like for like test. There is one comparison per conversation and three per day per visitor (12 from 2
+to 5 Nov, for judging). Comparing needs the
+private owner token the page received when it started the conversation.
 
 ## How it uses Qloo
 
@@ -94,7 +98,8 @@ The model writes the gift and the sentence. Code does the rest:
 
 Safety:
 
-- Only the tab that started a conversation can buy or compare from it. A signed token stays in that tab.
+- Buying, comparing and refunding need the private owner token the page received when it started the conversation.
+  The page keeps it in session storage.
 - Each AI call first holds 135 neurons of room under both caps, then the row takes the call's real cost.
 - A card already paid for is not bought again. There is one open order per card.
 - The PayPal webhook is verified and size limited. It records one paid row per order and checks the amount to the cent.
