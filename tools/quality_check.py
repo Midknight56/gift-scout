@@ -58,10 +58,18 @@ def budget_in(text: str):
 
 def measure(runs: list) -> dict:
     live = []
+    modes = {'live': 0, 'cache': 0, 'replay': 0, 'off': 0, 'other': 0}
+    mode_cards = {'live': [0, 0], 'cache': [0, 0], 'replay': [0, 0]}
     for item in runs:
         events = item.get('events', [])
         run_event = next((event for event in events if event.get('t') == 'run'), {})
-        if run_event.get('mode') == 'live':
+        mode = run_event.get('mode')
+        modes[mode if mode in modes else 'other'] += 1
+        if mode in mode_cards:
+            shown = [card for event in events if event.get('t') == 'cards' for card in (event.get('cards') or [])]
+            mode_cards[mode][0] += sum(card.get('product') is not None for card in shown)
+            mode_cards[mode][1] += len(shown)
+        if mode == 'live':
             live.append((item.get('message', ''), events))
 
     cards = []
@@ -120,6 +128,10 @@ def measure(runs: list) -> dict:
         'product_count': products if products else None,
         'mean_qloo_calls': sum(qloo_calls) / len(qloo_calls) if qloo_calls else None,
         'mean_neurons': sum(neurons) / len(neurons) if neurons else None,
+        'product_cards': products,
+        'product_share': f'{products} of {card_count}',
+        'modes': modes,
+        'by_mode_products': {mode: f'{found} of {total}' for mode, (found, total) in mode_cards.items()},
     }
 
 
@@ -143,8 +155,10 @@ def measured_lines(data: dict) -> list:
     ]
     if data['seed_shares_count'] is not None:
         lines.append(f"Cards with seed shares: {data['seed_shares_count']} of {data['cards']} cards ({percent(data['seed_shares_count'], data['cards'])})")
-    if data['product_count'] is not None:
-        lines.append(f"Cards with a product: {data['product_count']} of {data['cards']} cards ({percent(data['product_count'], data['cards'])})")
+    lines.append(f"Cards with a product: {data['product_share']} cards")
+    modes = data['modes']
+    lines.append('Runs by mode: ' + ', '.join(f'{modes[key]} {key}' for key in ('live', 'cache', 'replay', 'off', 'other')))
+    lines.append('Cards with a product by mode: ' + ', '.join(f'{key} {value}' for key, value in data['by_mode_products'].items()))
     lines.extend([f'Qloo calls per run: mean {qloo}', f'Neurons per run: mean {neuron_mean}'])
     return lines
 
@@ -187,6 +201,9 @@ def self_test() -> None:
         'mean_kinds': 1.5, 'lowest_kinds': 1, 'affinity_count': 3,
         'mean_affinity': (0.8 + 0.6 + 0.4) / 3, 'seed_shares_count': 1, 'product_count': 1,
         'mean_qloo_calls': 2.0, 'mean_neurons': 15.0,
+        'product_cards': 1, 'product_share': '1 of 4',
+        'modes': {'live': 2, 'cache': 1, 'replay': 0, 'off': 0, 'other': 0},
+        'by_mode_products': {'live': '1 of 4', 'cache': '0 of 1', 'replay': '0 of 0'},
     }
     result = measure(runs)
     expected_lines = [
@@ -197,7 +214,9 @@ def self_test() -> None:
         'Kinds per run: mean 1.50, lowest 1',
         'Mean Qloo affinity: 0.600',
         'Cards with seed shares: 1 of 4 cards (25.0%)',
-        'Cards with a product: 1 of 4 cards (25.0%)',
+        'Cards with a product: 1 of 4 cards',
+        'Runs by mode: 2 live, 1 cache, 0 replay, 0 off, 0 other',
+        'Cards with a product by mode: live 1 of 4, cache 0 of 1, replay 0 of 0',
         'Qloo calls per run: mean 2.00',
         'Neurons per run: mean 15.00',
     ]
