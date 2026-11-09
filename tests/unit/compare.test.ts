@@ -163,7 +163,8 @@ describe('POST /api/compare', () => {
 
   it('reserves budget before concurrent comparisons call the model', async () => {
     const db = new FakeD1(); dbs.push(db)
-    const ledger = new NeuronLedger(db, { app: 'gift-scout', dailyCap: 50, accountCap: 50, reserve: 50, day: () => '2026-10-23' })
+    // One comparison holds its own worst case, about 57 neurons, so a cap of 100 has room for one call and not two.
+    const ledger = new NeuronLedger(db, { app: 'gift-scout', dailyCap: 100, accountCap: 100, reserve: 50, day: () => '2026-10-23' })
     let modelCalls = 0, releaseModel!: () => void
     const modelGate = new Promise<void>((resolve) => { releaseModel = resolve })
     const model: Model = { name: 'shared', async chat() {
@@ -177,7 +178,7 @@ describe('POST /api/compare', () => {
     releaseModel()
     await Promise.all([first, second])
     expect(modelCalls).toBe(1)
-    expect((await ledger.spentToday()).all).toBeLessThanOrEqual(50)
+    expect((await ledger.spentToday()).all).toBeLessThanOrEqual(100)
   })
 
   it('passes reasoningEffort low and COMPARE_MAX_TOKENS to the model', async () => {

@@ -820,4 +820,15 @@ describe('payment attempt recovery', () => {
     const refunded = await refundPurchase({ conversation: ID, card: 't1c1', owner: await ownerToken(ID, SECRET) }, { conversations: f.conversations, paypal: f.paypal, ownerSecret: SECRET })
     expect(refunded.event).toMatchObject({ t: 'refunded', order_id: 'ORDER123', capture_id: 'CAPTURE1' })
   })
+
+  it('keeps the attempt city when a webhook recovers the purchase, so the tracker is added too', async () => {
+    const s = state(); s.attempts = [attempt({ ship_to: 'San Jose, CA' })]
+    const f = await setup(s)
+    f.paypal.verifyWebhook = async () => true
+    expect((await deliver(f.conversations, f.paypal)).status).toBe(200)
+    const saved = await f.conversations.get(ID)
+    expect((saved?.state as State).purchases).toMatchObject([{ order_id: 'ORDER123', status: 'captured', ship_to: 'San Jose, CA', tracker_id: 'CAPTURE1-GSCAPTURE1' }])
+    expect(f.paypal.trackers).toEqual([{ orderId: 'ORDER123', captureId: 'CAPTURE1', number: 'GSCAPTURE1' }])
+    expect(saved?.turns.flat().filter(e => e.t === 'shipped')).toMatchObject([{ ship_to: 'San Jose, CA' }])
+  })
 })

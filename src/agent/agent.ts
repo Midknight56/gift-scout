@@ -8,7 +8,8 @@ import type { Entity, Tag } from '../qloo/client'
 import type { SearchResult } from '../channel3/client'
 import type { QlooContext } from '../qloo/tools'
 import type { Card, Dropped, Found, ScoutEvent } from './events'
-import { neuronsFor, type ChatMessage, type Model, type ToolSpec } from './model'
+import { callReserve, neuronsFor, type ChatMessage, type Model, type ToolSpec } from './model'
+import { MAX_CALL_NEURONS } from '../limits'
 import { carryOut, PLAN_SCOUT, type Plan, type Ran } from './plan'
 import { SYSTEM_PROMPT } from './prompt'
 import { fixWhyPronouns, pronounsFromMessage, type PronounSet } from './pronouns'
@@ -35,6 +36,8 @@ export const MAX_TOOL_CALLS = 14
 // tokens, 1,400 x 27,273 per million = 38.2 neurons and the capped call total is 134.6. The daily caps still stop all
 // spending, so $0.
 export const MAX_OUTPUT_TOKENS = 1400
+/** Said when a call's worst case cost is over MAX_CALL_NEURONS, before anything is spent. */
+export const TOO_LONG = 'This conversation is too long for one more step. Start a new one.'
 
 export interface ConversationState {
   id: string
@@ -72,7 +75,8 @@ export interface Reservation {
 /** Checks the model can spend, and holds room for a call before it runs. */
 export interface Budget {
   allow(): Promise<boolean>
-  reserve(): Promise<Reservation | null>
+  /** `neurons`: the most this call can cost (callReserve); without it the ledger holds its default. */
+  reserve(neurons?: number): Promise<Reservation | null>
 }
 
 export const PRESENT_GIFTS: { name: string; description: string; inputSchema: JsonSchema } = {
@@ -581,15 +585,21 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
   const hint = (offered: string[]) => STEP_HINTS[offered.includes(PRESENT_GIFTS.name) ? PRESENT_GIFTS.name : offered[0]] ?? STEP_HINTS.present_gifts
 
   while (modelCalls < MAX_MODEL_CALLS && !presented && !stopped) {
-    const held = await o.budget.reserve()
+    const offered = steps[Math.min(step, steps.length - 1)]
+    const offeredSpecs = allSpecs.filter((t) => offered.includes(t.function.name))
+    const worst = callReserve(messages, offeredSpecs, MAX_OUTPUT_TOKENS)
+    if (worst > MAX_CALL_NEURONS) {
+      await o.emit({ t: 'error', text: TOO_LONG })
+      break
+    }
+    const held = await o.budget.reserve(worst)
     if (!held) {
       await o.emit({ t: 'error', text: 'Live scouting has used its budget for today. The three examples still work.' })
       break
     }
-    const offered = steps[Math.min(step, steps.length - 1)]
     let reply
     try {
-      reply = await o.model.chat(messages, allSpecs.filter((t) => offered.includes(t.function.name)), MAX_OUTPUT_TOKENS)
+      reply = await o.model.chat(messages, offeredSpecs, MAX_OUTPUT_TOKENS)
     } catch (error) {
       console.error('model call failed', error instanceof Error ? error.message : String(error))
       modelFailed = true
@@ -599,6 +609,7 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
     const spent = reply.neurons ?? neuronsFor(reply.prompt_tokens, reply.completion_tokens)
     neurons += spent
     await held.settle(spent)
+    if (spent > worst) console.log(`model call over its reserve: held ${worst}, cost ${Math.round(spent * 10) / 10}`)
 
     const usablePresentCall = reply.tool_calls.some((call) => {
       if (call.function.name !== PRESENT_GIFTS.name) return false

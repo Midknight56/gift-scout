@@ -41,6 +41,20 @@ export function neuronsFor(promptTokens: number, completionTokens: number): numb
   return promptTokens * NEURONS_PER_INPUT_TOKEN + completionTokens * NEURONS_PER_OUTPUT_TOKEN
 }
 
+// The most input tokens a call can hold, from its size. Every token of this model's tokenizer stands for at least one
+// byte of text, so the UTF-8 bytes of the messages are never fewer than their tokens. Tools are rendered into the
+// prompt in another form than JSON, so their bytes count one and a half times. Each message adds a few format tokens
+// and the prompt adds a fixed header: 16 a message and 400 in all cover both with room.
+export function inputTokenBound(messages: ChatMessage[], tools: ToolSpec[]): number {
+  const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length
+  return size(messages) + Math.ceil(size(tools) * 1.5) + 16 * messages.length + 400
+}
+
+/** The most one call can cost: its input bound plus every output token it is allowed, in whole neurons. */
+export function callReserve(messages: ChatMessage[], tools: ToolSpec[], maxTokens: number): number {
+  return Math.ceil(neuronsFor(inputTokenBound(messages, tools), maxTokens))
+}
+
 /** What Workers AI answers: the chat completion shape for this model, or the older flat shape. */
 interface RawReply {
   choices?: { finish_reason?: string | null; message?: { content?: string | null; tool_calls?: ToolCall[]; reasoning?: string | null; reasoning_content?: string | null } }[]

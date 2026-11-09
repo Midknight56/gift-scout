@@ -1,6 +1,6 @@
 import type { Budget } from './agent'
 import type { ScoutEvent } from './events'
-import { neuronsFor, type Model } from './model'
+import { callReserve, neuronsFor, type ChatMessage, type Model } from './model'
 import { QlooError, type EntityType, type QlooClient } from '../qloo/client'
 import { nameMatches, otherTypeTag } from '../qloo/tools'
 import { plain as displayText } from './text'
@@ -10,7 +10,7 @@ export type CompareKind = (typeof COMPARE_KINDS)[number]
 export interface PlainIdea { gift: string; name: string; kind: CompareKind; lookup_name?: string }
 
 // worst case 166 input tokens x 18,182 per million + 1,500 output x 27,273 per million = about 44 neurons,
-// under MAX_CALL_NEURONS 135 (src/limits.ts), and the daily caps in src/limits.ts stay under the free
+// under MAX_CALL_NEURONS 900 (src/limits.ts); the reserve is this call's own worst case, callReserve, and the daily caps in src/limits.ts stay under the free
 // 10,000 neurons a day, so a compare still costs $0.
 export const COMPARE_MAX_TOKENS = 1500
 
@@ -81,7 +81,8 @@ export async function runCompare(o: {
   message: string; turns: ScoutEvent[][]; cards: { gift?: string; entity: { name?: string; affinity?: number } }[]; callStart?: number
   qloo: QlooClient; model: Model; budget: Budget; emit(event: ScoutEvent): Promise<void>
 }): Promise<void> {
-  const held = await o.budget.reserve()
+  const messages: ChatMessage[] = [{ role: 'system', content: prompt }, { role: 'user', content: o.message }]
+  const held = await o.budget.reserve(callReserve(messages, [], COMPARE_MAX_TOKENS))
   if (!held) {
     await o.emit({ t: 'error', text: 'Comparing has used its budget for today.' })
     return
@@ -89,7 +90,7 @@ export async function runCompare(o: {
   let reply
   try {
     reply = await o.model.chat(
-      [{ role: 'system', content: prompt }, { role: 'user', content: o.message }],
+      messages,
       [],
       COMPARE_MAX_TOKENS,
       { reasoningEffort: 'low' },

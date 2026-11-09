@@ -93,9 +93,9 @@ export class NeuronLedger implements Budget {
     return spent.app + reserve <= this.opts.dailyCap && spent.all + reserve <= this.opts.accountCap
   }
 
-  async reserve(): Promise<Reservation | null> {
+  async reserve(amount?: number): Promise<Reservation | null> {
     const day = this.day()
-    const neurons = this.opts.reserve ?? MAX_CALL_NEURONS
+    const neurons = amount ?? this.opts.reserve ?? MAX_CALL_NEURONS
     const row = await this.db.prepare('INSERT INTO ai_calls (app, day, neurons) SELECT ?, ?, ? WHERE (SELECT COALESCE(SUM(neurons),0) FROM ai_calls WHERE day = ? AND app = ?) + ? <= ? AND (SELECT COALESCE(SUM(neurons),0) FROM ai_calls WHERE day = ?) + ? <= ? RETURNING id')
       .bind(this.opts.app, day, neurons, day, this.opts.app, neurons, this.opts.dailyCap, day, neurons, this.opts.accountCap).first<{ id: number }>()
     if (!row) return null
