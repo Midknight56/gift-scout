@@ -1,5 +1,7 @@
 // Record a complete Gift Scout visit as a continuous screencast and timestamped caption beats.
 // Usage: node tools/film_tour.mjs [base url] [--no-hold] [--skip-compare]
+// Order: brief, shortlist, comparison, refine, leave one interest out, a store listing, sandbox payment, tracker,
+// refund, share link. The long panel scroll and the How it works dialog are left out so the film stays on the product.
 import { execFileSync, execSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -160,28 +162,7 @@ try {
   const panelCall = await page.locator('#calls-list .call-row').first().innerText().catch(() => '')
   await beat('panel', null, true, clean(`${panelHeader} ${panelCall}`))
   const callsList = page.locator('#calls-list')
-  await callsList.evaluate((element) => { element.scrollTop = 0 })
-  await animateScroll(callsList, 10000)
-  const panelRows = await callsList.locator('.call-row, .order-row, .pay-row').evaluateAll((rows) => rows.filter((row) => {
-    const rowBox = row.getBoundingClientRect()
-    const listBox = document.querySelector('#calls-list').getBoundingClientRect()
-    return rowBox.bottom > listBox.top && rowBox.top < listBox.bottom
-  }).map((row) => row.innerText).join(' | '))
-  await beat('panel scrolled', null, false, clean(panelRows))
-  await callsList.evaluate((element) => { element.dataset.filmScrollDone = 'false'; element.dataset.filmScrollDirection = 'top' })
-  await callsList.evaluate((element) => {
-    const start = element.scrollTop
-    const began = performance.now()
-    const step = (now) => {
-      const progress = Math.min((now - began) / 2000, 1)
-      element.scrollTop = start * (1 - progress)
-      if (progress < 1) requestAnimationFrame(step)
-      else element.dataset.filmScrollDone = 'true'
-    }
-    requestAnimationFrame(step)
-  })
-  await page.waitForFunction(() => document.querySelector('#calls-list')?.dataset.filmScrollDone === 'true', null, { timeout: 7000 })
-  await pause(6000)
+  await pause(5000)
   const graph = page.locator('.walk-panel svg').first()
   await graph.waitFor({ state: 'visible', timeout: 15000 })
   await graph.evaluate((element) => element.scrollIntoView({ behavior: 'smooth', block: 'center' }))
@@ -218,7 +199,35 @@ try {
   await beat('narrowed in', null, false, await cardsText(secondList))
   await pause(6000)
 
-  const buy = secondList.locator('[data-buy]').first()
+  // Leave one interest out from its button in the panel, then show what was withdrawn and what replaced it.
+  const malt = page.locator('[data-leave-out]').filter({ hasText: /single malt/i }).first()
+  const leave = (await malt.count()) ? malt : page.locator('[data-leave-out]').last()
+  await smoothIntoView(leave)
+  await pause(1500)
+  await beat('leave out shown', null, false, clean((await page.locator('[data-leave-out]').allInnerTexts()).join(' | ')))
+  await click(leave)
+  await beat('leave out sent', null, true, clean(await leave.innerText()))
+  await page.locator('.leave-out-result').first().waitFor({ timeout: 120000 })
+  await smoothIntoView(page.locator('.leave-out-result').first())
+  await beat('left out', '.leave-out-result')
+  await page.waitForFunction(() => /Find a gift/.test(document.querySelector('.send-button')?.textContent ?? ''), null, { timeout: 120000 })
+  await pause(2000)
+  const latest = page.locator('.card-list').last()
+  await smoothIntoView(latest)
+  await beat('replaced', null, false, await cardsText(latest))
+  await pause(5000)
+  await beat('graph after', null, false, clean(`${await page.locator('.walk-panel svg').first().getAttribute('aria-label').catch(() => '') ?? ''} ${(await page.locator('.walk-panel svg text').allInnerTexts().catch(() => [])).join(' ')}`))
+  await pause(4000)
+
+  // A store listing if the current cards have one, else an idea, labelled as such on the card.
+  const current = page.locator('.card-list').last()
+  const offerCard = current.locator('.gift-card:not(.withdrawn)').filter({ has: page.locator('.card-kind.offer') }).first()
+  const chosen = (await offerCard.count()) ? offerCard : current.locator('.gift-card:not(.withdrawn)').filter({ has: page.locator('[data-buy]') }).first()
+  await smoothIntoView(chosen)
+  await pause(1500)
+  await beat(await offerCard.count() ? 'offer' : 'idea only', null, false, clean(await chosen.innerText()))
+  await pause(6000)
+  const buy = chosen.locator('[data-buy]').first()
   await click(buy)
   await beat('buy', '[data-buy]', true)
   const shipForm = page.locator('.ship-form')
@@ -259,16 +268,6 @@ try {
     return rowBox.bottom > listBox.top && rowBox.top < listBox.bottom
   }).map((row) => row.innerText).join(' | '))
   await beat('paypal rows', null, false, clean(paypalRows))
-
-  await click(page.locator('#how-button'))
-  const howDialog = page.locator('#how-dialog')
-  await howDialog.waitFor({ state: 'visible', timeout: 5000 })
-  await beat('how', null, true, clean(await howDialog.locator('.how-heading, .how-steps li').evaluateAll((items) => items.slice(0, 2).map((item) => item.innerText).join(' '))))
-  await animateScroll(howDialog, 10000)
-  await beat('how scrolled', null, false, clean(await howDialog.innerText()))
-  await waitForDuration(3000)
-  await click(page.locator('#how-close'))
-  await beat('how closed', null, true, 'How it works dialog closed')
 
   const shareButton = page.locator('#usage .share-button').first()
   await shareButton.waitFor({ state: 'visible', timeout: 10000 })
