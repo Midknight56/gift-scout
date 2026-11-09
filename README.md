@@ -100,7 +100,9 @@ Safety:
 
 - Buying, comparing and refunding need the private owner token the page received when it started the conversation.
   The page keeps it in session storage.
-- Each AI call first holds 135 neurons of room under both caps, then the row takes the call's real cost.
+- Each AI call first holds its own worst case under both caps: the bytes it sends (never fewer than its tokens) plus
+  every token it may write, at the published price. A call too large to fit is refused before it runs. The row then
+  takes the call's real cost.
 - A card already paid for is not bought again. There is one open order per card.
 - The PayPal webhook is verified and size limited. It records one paid row per order and checks the amount to the cent.
 - A Qloo or PayPal failure is never saved as an answer.

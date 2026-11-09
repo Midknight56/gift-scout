@@ -58,11 +58,13 @@ const NEURON_WINDOWS = [
 export function dailyNeuronShare(now: number = clock.now()): number {
   return inWindows(NEURON_WINDOWS, now) ? JUDGING_DAILY_NEURONS : DEFAULT_DAILY_NEURONS
 }
-// The room held in the ledger before each Workers AI call; the row then takes the call's real cost, even when that is
-// more. The reserve is the most one capped call can cost on this model: 5,300 input tokens x 18,182 per million = 96.4
-// plus 1,400 output tokens x 27,273 per million = 38.2, total 134.6, rounded up to 135. A call over the reserve can
-// pass the cap only by its own excess, and the account cap leaves 500 of the free 10,000 for that.
-export const MAX_CALL_NEURONS = 135
+// The most one Workers AI call may hold in the ledger. Before each call the code reserves that call's own worst case,
+// callReserve in src/agent/model.ts: its input bound (UTF-8 bytes, never fewer than tokens) plus every output token it
+// may write. A call whose worst case is over this is refused before it runs. So no call can cost more than it holds,
+// and the daily and account caps are hard: the account cap of 9,500 stays under the free 10,000. 900 lets a present
+// step of up to about 47,000 bytes run: (900 - 38.2) / 18,182 per million = 47,398. The largest real call in the
+// ledger to 9 Nov 2026 cost 104.1 neurons. The default reserve, for a caller that names none, is this ceiling.
+export const MAX_CALL_NEURONS = 900
 
 /** "Buy this one" taps per visitor a day. Each makes one PayPal sandbox order and one model call (at most 135 neurons). */
 export const DAILY_BUYS_PER_VISITOR = 6

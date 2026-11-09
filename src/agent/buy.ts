@@ -6,7 +6,7 @@ import { validate, type JsonSchema } from '../mcp/schema'
 import { PayPalError, SANDBOX_TEST_CARD, type Order, type PayPal, type Shipping } from '../paypal/client'
 import { MIN_GIFT_PRICE, type Budget, type ConversationState } from './agent'
 import type { Card, ScoutEvent } from './events'
-import { neuronsFor, type ChatMessage, type Model } from './model'
+import { callReserve, neuronsFor, type ChatMessage, type Model } from './model'
 
 /** The whole dollar quote shown before a payment for an idea. */
 export function quoteFor(card: Pick<Card, 'price_low' | 'price_high'>): number {
@@ -289,7 +289,7 @@ async function runBuyTurnLocked(o: BuyOptions, pending?: BuyState): Promise<BuyS
   let bought = false
   let paypalCalled = false
   while (modelCalls < MAX_BUY_MODEL_CALLS && !bought) {
-    const held = await o.budget.reserve()
+    const held = await o.budget.reserve(callReserve(messages, [spec], 200))
     if (!held) {
       await o.emit({ t: 'error', text: 'Live scouting has used its budget for today, so buying waits until tomorrow.' })
       break

@@ -74,8 +74,9 @@ async function streamTurn(deps: ScoutDeps, message: string, conversation?: strin
 describe('cap battle tests', () => {
   it('stops an app neuron cap crossed after the first model call', async () => {
     const ledgerDb = db()
-    const ledger = new NeuronLedger(ledgerDb, { app: 'gift-scout', dailyCap: 100, accountCap: 1000, reserve: 50, day: () => 'battle-day' })
-    const model = scripted([reply([], { content: 'Thinking.', neurons: 51 }), giftsReply()])
+    // Each call holds its own worst case (a few hundred neurons here): the first fits under 700, the second (at least 45) does not after 660 spent.
+    const ledger = new NeuronLedger(ledgerDb, { app: 'gift-scout', dailyCap: 700, accountCap: 10000, reserve: 50, day: () => 'battle-day' })
+    const model = scripted([reply([], { content: 'Thinking.', neurons: 660 }), giftsReply()])
     const events = await streamTurn(scoutDeps(model, ledger), 'My sister loves Phoebe Bridgers.')
     expect(model.calls).toBe(1)
     expect(events.some((e) => e.t === 'error' && /budget for today/.test(e.text))).toBe(true)
@@ -85,8 +86,8 @@ describe('cap battle tests', () => {
 
   it('stops a shared account neuron cap crossed after the first model call', async () => {
     const ledgerDb = db()
-    const ledger = new NeuronLedger(ledgerDb, { app: 'gift-scout', dailyCap: 1000, accountCap: 100, reserve: 50, day: () => 'battle-day' })
-    const model = scripted([reply([], { content: 'Thinking.', neurons: 51 }), giftsReply()])
+    const ledger = new NeuronLedger(ledgerDb, { app: 'gift-scout', dailyCap: 10000, accountCap: 700, reserve: 50, day: () => 'battle-day' })
+    const model = scripted([reply([], { content: 'Thinking.', neurons: 660 }), giftsReply()])
     ledgerDb.insertCall('another-app', 'battle-day', 0)
     const events = await streamTurn(scoutDeps(model, ledger), 'My sister loves Phoebe Bridgers.')
     expect(model.calls).toBe(1)

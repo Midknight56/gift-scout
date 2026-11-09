@@ -65,7 +65,8 @@ async function savePaid(conversations: Conversations, id: string, orderId: strin
       const card = state.cards.find(c => c.id === recoverCard)
       if (!attempt || !card || state.purchases?.some(p => p.card === recoverCard && p.status !== 'created')) return null
       const purchase: Purchase = { card: card.id, gift: card.gift, order_id: orderId, amount, status: 'created',
-        ...(card.product ? { product_title: card.product.title, product_url: card.product.url } : {}) }
+        ...(card.product ? { product_title: card.product.title, product_url: card.product.url } : {}),
+        ...(attempt.ship_to ? { ship_to: attempt.ship_to } : {}) }
       fresh = {
         state: { ...state, purchases: [...(state.purchases ?? []), purchase], attempts: state.attempts?.map(a => a.request_id === attempt.request_id ? { ...a, status: 'done', order_id: orderId } : a) } as State,
         turns: [...fresh.turns, [{ t: 'order', card: card.id, gift: card.gift, order_id: orderId, amount, method: attempt.method, ...(card.product ? { product_title: card.product.title, product_url: card.product.url } : {}) }]],
