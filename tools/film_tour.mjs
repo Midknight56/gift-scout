@@ -1,11 +1,12 @@
 // Record a complete Gift Scout visit as a continuous screencast and timestamped caption beats.
 // Usage: node tools/film_tour.mjs [base url] [--no-hold] [--skip-compare]
-// Order: brief, shortlist, comparison, refine, leave one interest out, a store listing, sandbox payment, tracker,
+// Order: brief, shortlist, comparison, refine, leave one interest out, a store listing, payment, tracker,
 // refund, share link. The long panel scroll and the How it works dialog are left out so the film stays on the product.
 import { execFileSync, execSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright'
+import { pageCleaner } from './film_words.mjs'
 
 const args = process.argv.slice(2)
 const BASE = (args.find((arg) => arg.startsWith('http')) ?? 'https://gift-scout.midknight-labs.workers.dev').replace(/\/$/, '')
@@ -103,6 +104,7 @@ const cardsText = async (list, includeReason = false) => list.locator('.gift-car
 }).join(' | '), includeReason).then(clean)
 
 try {
+  await page.addInitScript(pageCleaner)
   await page.addInitScript(() => {
     window.__filmShareUrl = null
     try {
