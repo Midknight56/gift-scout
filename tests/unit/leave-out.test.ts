@@ -44,4 +44,11 @@ describe('leave this out', () => {
     expect(css).toMatch(/\.leave-out-row \{[^}]*flex-wrap: wrap[^}]*gap: 12px/)
     expect(css).toMatch(/\.leave-out \{[^}]*padding: 8px/)
   })
+
+  it('draws the buttons enabled even when they appear during a running turn', () => {
+    const draw = app.slice(app.indexOf('function drawLeaveOut('), app.indexOf('function interestFor('))
+    expect(draw).not.toContain('disabled')
+    const submit = app.slice(app.indexOf('async function submitMessage('), app.indexOf('/** The ship to fields'))
+    expect(submit).toMatch(/finally \{[\s\S]*\.leave-out[\s\S]*disabled = false/)
+  })
 })

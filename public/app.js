@@ -179,7 +179,7 @@ function drawLeaveOut() {
   if (!seeds.length) return;
   const holder = document.createElement('div');
   holder.innerHTML = `<div class="leave-out-row" role="group" aria-label="Leave an interest out">${seeds
-    .map((seed) => `<button type="button" class="leave-out" data-leave-out="${escapeHtml(seed)}"${busy ? ' disabled' : ''}>${escapeHtml(leaveOutLabel(seed))}</button>`).join('')}</div>`;
+    .map((seed) => `<button type="button" class="leave-out" data-leave-out="${escapeHtml(seed)}">${escapeHtml(leaveOutLabel(seed))}</button>`).join('')}</div>`;
   walkPanel.append(holder.firstElementChild);
 }
 
@@ -551,6 +551,7 @@ async function submitMessage(message) {
     busy = false;
     send.disabled = false;
     send.querySelector('span').textContent = 'Find a gift';
+    walkPanel.querySelectorAll('.leave-out').forEach((button) => { button.disabled = false; });
   }
 }
 

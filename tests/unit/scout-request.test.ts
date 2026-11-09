@@ -13,7 +13,7 @@ describe('scout requests from the page', () => {
     await runInNewContext(`${ownerFor}\n${submit}\nsubmitMessage('Cheaper please')`, {
       conversation: 'shared123', busy: false,
       empty: {}, examples: {}, input: {}, send,
-      chat: { querySelector: () => null }, addLine: () => {}, readEvents: async () => {},
+      chat: { querySelector: () => null }, walkPanel: { querySelectorAll: () => [] }, addLine: () => {}, readEvents: async () => {},
       sessionStorage: { getItem: () => token },
       fetch: async (_url: string, init: { body: string }) => {
         bodies.push(JSON.parse(init.body))
