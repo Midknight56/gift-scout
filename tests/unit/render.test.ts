@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error Public renderer is an ES module without a TypeScript declaration.
-import { cardHtml, callRowHtml, callSummary, compareHtml, orderBlockHtml, offerMessage, payCopy, panelSummary, plainLabels, priceBand, quoteFor as renderQuote, refundPendingRowHtml, shippingProblem, walkSvg } from '../../public/render.js';
+import { cardHtml, callRowHtml, callSummary, compareHtml, merchantHost, orderBlockHtml, offerMessage, payCopy, panelSummary, plainLabels, priceBand, quoteFor as renderQuote, refundPendingRowHtml, shippingProblem, walkSvg } from '../../public/render.js';
 
 it('explains comparison coverage, its scope, and nearest signals', () => {
   const html = compareHtml({ plain: [{ gift: 'Dinner', name: 'Table', found: true, affinity: 0.8, context: 'nearest' }], coverage: { plain_found: 4, plain_total: 6, cards_scored: 6, cards_total: 6 }, plain_mean: 0.8, qloo_mean: 0.9, not_found: 2 });
@@ -493,7 +493,7 @@ describe('offer messages and payment copy', () => {
     expect(offerMessage({ t: 'offer_changed', new_price: 24 })).toBe('The price is now $24.00. Tap Pay again to pay $24.00.');
     expect(offerMessage({ t: 'offer_gone' })).toBe('That item is not on offer any more. The idea stays.');
     expect(offerMessage({ t: 'offer_gone', reason: 'over_budget', new_price: 41 })).toBe('The price is now $41.00, over the budget. The idea stays.');
-    expect(payCopy({ price_low: 20, price_high: 40 }).note).toBe('A sandbox payment of $30.00 for this idea. PayPal sandbox, no real money.');
+    expect(payCopy({ price_low: 20, price_high: 40 }).note).toBe('A sandbox payment of $30.00 for this idea. There is no store listing. No store order is placed. Nothing ships.');
     expect(callSummary({ tool: 'check_offer', args: { title: 'Fender strap' } })).toBe('Check the current offer for "Fender strap"');
   });
 });
@@ -502,7 +502,7 @@ describe('offer messages and payment copy', () => {
 it('shows the exact idea quote and agrees with server quotes over twenty bands', async () => {
   const { quoteFor } = await import('../../src/agent/buy')
   const card = { price_low: 20, price_high: 30 }
-  expect(payCopy(card)).toEqual({ paypal: 'Pay $25.00 with PayPal', card: 'Pay $25.00 with the test card', note: 'A sandbox payment of $25.00 for this idea. PayPal sandbox, no real money.' })
+  expect(payCopy(card)).toEqual({ paypal: 'Pay $25.00 with PayPal', card: 'Pay $25.00 with the test card', note: 'A sandbox payment of $25.00 for this idea. There is no store listing. No store order is placed. Nothing ships.' })
   const bands = Array.from({ length: 20 }, (_, i) => ({ price_low: 5 + i * 1.25, price_high: 10 + i * 2.5 }))
   for (const band of bands) {
     expect(renderQuote(band)).toBe(quoteFor(band))
@@ -514,3 +514,125 @@ it('shows the exact idea quote and agrees with server quotes over twenty bands',
 it('explains a changed title and shop', () => {
   expect(offerMessage({ t: 'offer_changed', changes: ['title', 'shop'], new_title: 'Fallen Angel (Deluxe)', shop: 'other.test', new_price: 20 })).toBe('This offer changed. It is now Fallen Angel (Deluxe) from other.test at $20.00. Tap Pay again to pay for it.')
 })
+
+describe('offer and idea cards', () => {
+  it('shows a product card with store listing label, exact price, merchant host, buy button, and disclosure line', () => {
+    const card = {
+      id: 'c1',
+      gift: 'A Fender guitar strap',
+      why: 'A thoughtful pick',
+      price_low: 20,
+      price_high: 40,
+      entity: { name: 'Fender' },
+      seeds: [],
+      from_call: 1,
+      product: {
+        title: 'Fender Strap',
+        brand: 'Fender',
+        price: 24.99,
+        url: 'https://www.shop.example.com/p/1',
+      },
+    };
+    const html = cardHtml(card, { buyable: true });
+    expect(html).toContain('Store listing');
+    expect(html).toContain('$24.99');
+    expect(html).toContain('shop.example.com');
+    expect(html).toContain('Buy this one');
+    expect(html).toContain('data-buy="c1"');
+    expect(html).toContain('Sandbox checkout. No store order is placed. Nothing ships.');
+  });
+
+  it('shows an idea card with gift idea label, estimated price band, sandbox button, and disclosure line', () => {
+    const card = {
+      id: 'c2',
+      gift: 'Dinner for two',
+      why: 'A lovely meal',
+      price_low: 20,
+      price_high: 40,
+      entity: { name: 'Local Bistro' },
+      seeds: [],
+      from_call: 1,
+    };
+    const html = cardHtml(card, { buyable: true });
+    expect(html).toContain('Gift idea');
+    expect(html).toContain('Estimated $20 to $40');
+    expect(html).toContain('Try a sandbox payment');
+    expect(html).toContain('data-buy="c2"');
+    expect(html).toContain('Sandbox checkout. No store order is placed. Nothing ships.');
+  });
+
+  it('renders a shared card without buy button and disclosure line', () => {
+    const ideaCard = {
+      id: 'c2',
+      gift: 'Dinner for two',
+      why: 'A lovely meal',
+      price_low: 20,
+      price_high: 40,
+      entity: { name: 'Local Bistro' },
+      seeds: [],
+      from_call: 1,
+    };
+    const sharedIdea = cardHtml(ideaCard, { buyable: false });
+    expect(sharedIdea).toContain('Gift idea');
+    expect(sharedIdea).toContain('Estimated $20 to $40');
+    expect(sharedIdea).not.toContain('data-buy');
+    expect(sharedIdea).not.toContain('pay-disclosure');
+    expect(sharedIdea).not.toContain('Sandbox checkout. No store order is placed. Nothing ships.');
+
+    const productCard = {
+      id: 'c1',
+      gift: 'A Fender guitar strap',
+      why: 'A thoughtful pick',
+      price_low: 20,
+      price_high: 40,
+      entity: { name: 'Fender' },
+      seeds: [],
+      from_call: 1,
+      product: {
+        title: 'Fender Strap',
+        brand: 'Fender',
+        price: 24.99,
+        url: 'https://www.shop.example.com/p/1',
+      },
+    };
+    const sharedProduct = cardHtml(productCard, { buyable: false });
+    expect(sharedProduct).toContain('Store listing');
+    expect(sharedProduct).toContain('$24.99');
+    expect(sharedProduct).not.toContain('data-buy');
+    expect(sharedProduct).not.toContain('pay-disclosure');
+  });
+
+  it('formats pay copy notes for both kinds and extracts merchant host only for https urls', () => {
+    const productWithHost = {
+      product: {
+        title: 'Fender strap',
+        price: 24.99,
+        url: 'https://www.shop.example.com/p/1',
+      },
+    };
+    expect(payCopy(productWithHost).note).toBe(
+      'Paying $24.99 for Fender strap from shop.example.com. PayPal sandbox. No store order is placed. Nothing ships.'
+    );
+
+    const productWithoutHost = {
+      product: {
+        title: 'Fender strap',
+        price: 24.99,
+      },
+    };
+    expect(payCopy(productWithoutHost).note).toBe(
+      'Paying $24.99 for Fender strap. PayPal sandbox. No store order is placed. Nothing ships.'
+    );
+
+    const ideaCard = { price_low: 20, price_high: 40 };
+    expect(payCopy(ideaCard).note).toBe(
+      'A sandbox payment of $30.00 for this idea. There is no store listing. No store order is placed. Nothing ships.'
+    );
+
+    expect(merchantHost('http://shop.example.com/p/1')).toBe('');
+    expect(merchantHost('https://www.shop.example.com/p/1')).toBe('shop.example.com');
+    expect(merchantHost('https://amazon.com')).toBe('amazon.com');
+    expect(merchantHost('')).toBe('');
+    expect(merchantHost(undefined)).toBe('');
+  });
+});

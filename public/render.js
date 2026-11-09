@@ -73,7 +73,18 @@ function splitShares(shares) {
   return portions.sort((a, b) => b.share - a.share || a.index - b.index).map(({ name, value }) => ({ name, value }));
 }
 
-/** `buyable` adds the "Buy this one" button: only on the latest cards of a live conversation, never on a share page. */
+export function merchantHost(url) {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return '';
+    return parsed.hostname.replace(/^www\./i, '');
+  } catch {
+    return '';
+  }
+}
+
+/** `buyable` adds the buy button: only on the latest cards of a live conversation, never on a share page. */
 export function cardHtml(card, { buyable = false } = {}) {
   const gift = escapeHtml(card.gift);
   const why = escapeHtml(card.why);
@@ -97,15 +108,20 @@ export function cardHtml(card, { buyable = false } = {}) {
   const affinityTitle = hasShares
     ? "Qloo's own split of which favourite pulled this in."
     : `How strongly people who love ${seedNames} also love ${entityName}, on Qloo's 0 to 1 scale.`;
+  const isOffer = Boolean(card.product);
+  const kind = isOffer ? '<span class="card-kind offer">Store listing</span>' : '<span class="card-kind idea">Gift idea</span>';
+  const price = isOffer ? `$${Number(card.product.price).toFixed(2)}` : `Estimated ${priceBand(card.price_low, card.price_high)}`;
+  const buyText = isOffer ? 'Buy this one' : 'Try a sandbox payment';
   let product = '';
   if (card.product) {
     const item = card.product;
     const safeUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' ? url.href : ''; } catch { return ''; } };
     const image = safeUrl(item.image ?? '');
     const url = safeUrl(item.url ?? '');
-    product = `<div class="product-block">${image ? `<img class="product-image" src="${escapeHtml(image)}" alt="${escapeHtml(plainName(item.title))}" width="64" height="64" loading="lazy">` : ''}<div class="product-details"><strong class="product-title">${escapeHtml(plainName(item.title))}</strong>${item.brand ? `<span class="product-brand">${escapeHtml(plainName(item.brand))}</span>` : ''}<span class="product-price">$${Number(item.price).toFixed(2)}</span>${url ? `<a class="product-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow">See it</a>` : ''}<span class="product-credit">Found by Channel3</span></div></div>`;
+    const host = merchantHost(item.url);
+    product = `<div class="product-block">${image ? `<img class="product-image" src="${escapeHtml(image)}" alt="${escapeHtml(plainName(item.title))}" width="64" height="64" loading="lazy">` : ''}<div class="product-details"><strong class="product-title">${escapeHtml(plainName(item.title))}</strong>${item.brand ? `<span class="product-brand">${escapeHtml(plainName(item.brand))}</span>` : ''}${host ? `<span class="product-merchant">${escapeHtml(host)}</span>` : ''}<span class="product-price">$${Number(item.price).toFixed(2)}</span>${url ? `<a class="product-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow">See it</a>` : ''}<span class="product-credit">Found by Channel3</span></div></div>`;
   }
-  return `<article class="gift-card" style="--index:0"><div class="card-top"><h3 class="gift-name">${gift}</h3><span class="price">${priceBand(card.price_low, card.price_high)}</span></div><p class="gift-why">${why}</p>${product}<div class="because"><span class="because-seeds">${becauseSeeds}</span><span class="because-arrow" aria-hidden="true">→</span><span class="because-entity">${entity}</span><span class="affinity" role="img" aria-label="Qloo affinity ${score} of 1" title="${escapeHtml(affinityTitle)}"><span class="affinity-track"><span class="affinity-fill" style="width:${width}%"></span></span><span class="affinity-label">affinity</span><span>${score}</span></span><a class="call-link" href="#call-${Number.isFinite(call) ? call : 0}" data-call="${Number.isFinite(call) ? call : 0}">call ${Number.isFinite(call) ? call : 0}</a></div>${buyable ? `<div class="card-actions"><button type="button" class="buy-button" data-buy="${escapeHtml(card.id)}">Buy this one</button></div>` : ''}</article>`;
+  return `<article class="gift-card" style="--index:0">${kind}<div class="card-top"><h3 class="gift-name">${gift}</h3><span class="price">${price}</span></div><p class="gift-why">${why}</p>${product}<div class="because"><span class="because-seeds">${becauseSeeds}</span><span class="because-arrow" aria-hidden="true">→</span><span class="because-entity">${entity}</span><span class="affinity" role="img" aria-label="Qloo affinity ${score} of 1" title="${escapeHtml(affinityTitle)}"><span class="affinity-track"><span class="affinity-fill" style="width:${width}%"></span></span><span class="affinity-label">affinity</span><span>${score}</span></span><a class="call-link" href="#call-${Number.isFinite(call) ? call : 0}" data-call="${Number.isFinite(call) ? call : 0}">call ${Number.isFinite(call) ? call : 0}</a></div>${buyable ? `<div class="card-actions"><button type="button" class="buy-button" data-buy="${escapeHtml(card.id)}">${buyText}</button><p class="pay-disclosure">Sandbox checkout. No store order is placed. Nothing ships.</p></div>` : ''}</article>`;
 }
 
 /** A short count of completed Qloo tool results in the current conversation. */
@@ -338,10 +354,15 @@ export function quoteFor(card) {
 
 export function payCopy(card) {
   const price = Number(card?.product ? card.product.price : quoteFor(card)).toFixed(2);
+  const host = card?.product ? merchantHost(card.product.url) : '';
+  const fromHost = host ? ` from ${host}` : '';
+  const note = card?.product
+    ? `Paying $${price} for ${card.product.title}${fromHost}. PayPal sandbox. No store order is placed. Nothing ships.`
+    : `A sandbox payment of $${price} for this idea. There is no store listing. No store order is placed. Nothing ships.`;
   return {
     paypal: `Pay $${price} with PayPal`,
     card: `Pay $${price} with the test card`,
-    note: card?.product ? `Paying for ${card.product.title}. PayPal sandbox, no real money.` : `A sandbox payment of $${price} for this idea. PayPal sandbox, no real money.`,
+    note,
   };
 }
 

@@ -38,6 +38,9 @@ h1 { margin: 0; font: 400 clamp(68px, 10vw, 112px)/.92 'Instrument Serif', Georg
 .gift-card { padding: 18px 19px 15px; border: 1px solid var(--hairline); border-radius: 4px; background: var(--white); animation: rise 420ms var(--ease) both; animation-delay: calc(var(--index, 0) * 90ms); }
 @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.card-kind { display: inline-block; margin-bottom: 8px; padding: 2px 8px; border: 1px solid currentColor; border-radius: 999px; font-size: 12px; font-weight: 600; text-transform: uppercase; line-height: 1.4; }
+.card-kind.offer { color: var(--accent); }
+.card-kind.idea { color: var(--muted); }
 .gift-name { margin: 0; font: 400 25px/1.08 'Instrument Serif', Georgia, serif; letter-spacing: -.015em; }
 .price { flex: 0 0 auto; padding: 6px 8px; border-radius: 2px; background: var(--accent-wash); color: #75452f; font-size: 14px; font-weight: 600; }
 .gift-why { margin: 10px 0 13px; color: var(--muted); font-size: 14px; line-height: 1.6; }
@@ -177,10 +180,11 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
 .usage-line { margin: 0 0 8px; }
 .start-own { display: inline-block; margin-top: 16px; text-decoration: none; }
 [hidden] { display: none !important; }
-.card-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; margin-top: 16px; }
 .buy-button { min-height: 44px; padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--white); font-weight: 600; cursor: pointer; transition: background var(--motion); }
 .buy-button:hover { background: var(--accent); border-color: var(--accent); }
 .buy-button:disabled { opacity: .5; cursor: default; }
+.pay-disclosure { flex-basis: 100%; margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; text-align: right; }
 .pay-row .call-number { color: var(--green); }
 .pay-line { margin: 0 0 6px; }
 .pay-row.paid, .pay-row.shipped { border-color: var(--green); }
@@ -255,7 +259,7 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
 .product-image { flex: 0 0 64px; width: 64px; height: 64px; object-fit: cover; border: 1px solid var(--hairline); }
 .product-details { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-items: center; gap: 5px 10px; overflow-wrap: anywhere; font-size: 14px; }
 .product-title { flex-basis: 100%; font-weight: 600; }
-.product-brand, .product-credit { color: var(--muted); }
+.product-brand, .product-merchant, .product-credit { color: var(--muted); }
 .product-price { font-weight: 600; }
 .product-link { display: inline-flex; min-height: 44px; align-items: center; color: var(--accent); text-underline-offset: 3px; }
 .product-credit { flex-basis: 100%; font-size: 14px; }

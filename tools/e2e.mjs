@@ -176,7 +176,7 @@ async function main() {
       await strangerPage.locator('.gift-card').first().waitFor({ timeout: 15000 })
       await strangerPage.locator('.start-own').waitFor({ timeout: 15000 })
       const sharedCards = await strangerPage.locator('.gift-card').count()
-      const visibleBuyButtons = await strangerPage.getByRole('button', { name: 'Buy this one', exact: true }).count()
+      const visibleBuyButtons = await strangerPage.locator('[data-buy]').count()
       check('stranger sees no buy button', sharedCards > 0 && visibleBuyButtons === 0, `${sharedCards} cards, ${visibleBuyButtons} buy buttons`)
       const visibleCompareButtons = await strangerPage.getByRole('button', { name: 'Compare with Qloo off', exact: true }).count()
       check('stranger sees no compare button', visibleCompareButtons === 0, `${visibleCompareButtons} compare buttons`)
