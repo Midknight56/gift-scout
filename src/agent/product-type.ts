@@ -1,6 +1,32 @@
 import type { GiftProduct } from '../channel3/client'
 import { interestKey } from './text'
 
+// Genre families for books. A listing is refused only when both sides name a family and they share none.
+const GENRE_FAMILIES: [string, RegExp][] = [
+  ['crime', /\b(?:mystery|mysteries|crime|thrillers?|suspense|detective|spy|espionage|noir)\b/i],
+  ['fantasy', /\bfantasy\b/i],
+  ['science fiction', /\b(?:science fiction|sci fi|scifi|space opera|dystopian)\b/i],
+  ['romance', /\b(?:romance|romantic)\b/i],
+  ['horror', /\bhorror\b/i],
+  ['biography', /\b(?:biography|memoir|autobiography)\b/i],
+  ['children', /\b(?:children|picture book)\b/i],
+]
+
+function families(genres: string[] | undefined): Set<string> {
+  const found = new Set<string>()
+  for (const genre of genres ?? []) {
+    const text = genre.replace(/[^\p{L}\p{N}]+/gu, ' ')
+    for (const [name, words] of GENRE_FAMILIES) if (words.test(text)) found.add(name)
+  }
+  return found
+}
+
+/** False only when the taste graph book and the listing both have known genre families and none is shared. */
+export function genresAgree(entityGenres: string[] | undefined, productGenres: string[] | undefined): boolean {
+  const a = families(entityGenres), b = families(productGenres)
+  return !a.size || !b.size || [...a].some((name) => b.has(name))
+}
+
 // Specific accessories precede the objects they name. Unrecognized gift types stay ideas.
 const types: [string, RegExp][] = [
   ['gift card', /\bgift (?:cards?|vouchers?|certificates?)\b/],

@@ -14,7 +14,7 @@ import { SYSTEM_PROMPT } from './prompt'
 import { fixWhyPronouns, pronounsFromMessage, type PronounSet } from './pronouns'
 import { budgetIn, interestKey, plain, saidIn, takenBack } from './text'
 import type { Attempt } from './buy'
-import { matchesGiftType } from './product-type'
+import { genresAgree, matchesGiftType } from './product-type'
 
 export { budgetIn, plain, saidIn }
 
@@ -253,6 +253,7 @@ function toFound(e: Entity): Found {
   if (e.affinity !== undefined) f.affinity = e.affinity
   if (e.detail) f.detail = e.detail
   if (e.address) f.address = e.address
+  if (e.type === 'book' && e.tags?.length) f.genres = e.tags.slice(0, 5)
   return f
 }
 
@@ -338,7 +339,7 @@ function folded(value: string): string {
 }
 
 /** Rank affordable products that name the intended entity. */
-export function pickProduct(products: SearchResult, entityName: string, entityType: string, priceHigh: number, intendedGift?: string) {
+export function pickProduct(products: SearchResult, entityName: string, entityType: string, priceHigh: number, intendedGift?: string, entityGenres?: string[]) {
   if (!products.ok) return undefined
   const normalize = (value: string) => folded(value).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
   const entity = normalize(entityName)
@@ -354,6 +355,7 @@ export function pickProduct(products: SearchResult, entityName: string, entityTy
     if (product.availability === 'OutOfStock' || product.condition === 'used' || about.test(titleWithoutEntity)) return []
     let kind: 'book' | undefined
     if (entityType === 'book') {
+      if (!genresAgree(entityGenres, product.genres)) return []
       if (notBook.test(titleWithoutEntity.replace(/\blarge print\b/gi, ' '))) return []
       if (product.category) {
         if (![product.category.slug, product.category.title, ...product.category.path].some((name) => /\bbooks?\b/i.test(name))) return []
@@ -464,7 +466,7 @@ async function attachProducts(cards: Card[], state: ConversationState, products:
     let result: SearchResult
     try { result = await products.search(query, { limit: 10, maxPrice: card.price_high }) }
     catch { result = { ok: false, reason: 'error' } }
-    const picked = pickProduct(result, card.entity.name, card.entity.type, card.price_high, card.gift)
+    const picked = pickProduct(result, card.entity.name, card.entity.type, card.price_high, card.gift, state.found[card.entity.id]?.entity.genres)
     const reason = result.ok ? '' : result.reason === 'capped' ? 'Daily search limit reached.' : result.reason === 'spent' ? 'Product search credits are spent.' : 'Product search failed.'
     if (picked) {
       const item = picked.product

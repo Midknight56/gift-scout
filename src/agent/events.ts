@@ -15,6 +15,8 @@ export interface Found {
   detail?: string
   address?: string
   price?: number
+  /** A book's genre tags from Qloo, kept to tell apart books that share a title. */
+  genres?: string[]
 }
 
 /** A real item found for this card by Channel3. */

@@ -119,7 +119,8 @@ export async function scoutTurn(message: string, conversationId: string | undefi
 
   // 1. The same first message, answered live before.
   // A run with product search has products on its cards: it is kept apart from one without, since both Workers share the cache.
-  const key = turn === 1 ? (deps.products ? 'products:' : '') + await runKey(message) : ''
+  // v2: cards from before the 9 Nov fixes (named gifts, shop domain, book genres) are not replayed.
+  const key = turn === 1 ? 'v2:' + (deps.products ? 'products:' : '') + await runKey(message) : ''
   if (turn === 1) {
     const earlier = await deps.runs.get(key)
     const old = earlier ? await deps.conversations.get(earlier) : null

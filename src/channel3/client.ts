@@ -16,6 +16,8 @@ export interface GiftProduct {
   availability?: 'InStock' | 'OutOfStock'
   condition?: 'new' | 'used'
   category?: { slug: string; title: string; path: string[] }
+  /** Genres the shop gives a book, used to tell apart books that share a title. */
+  genres?: string[]
 }
 
 export type SearchResult =
@@ -33,6 +35,7 @@ interface RawProduct {
   images?: { url?: unknown; cleaned_url?: unknown }[]
   offers?: { availability?: unknown; condition?: unknown; url?: unknown; domain?: unknown; price?: { price?: unknown; currency?: unknown } | null }[]
   category?: { slug?: unknown; title?: unknown; path?: { slug?: unknown; title?: unknown }[] } | null
+  structured_attributes?: { genre?: unknown } | null
 }
 
 function mapProduct(raw: RawProduct): GiftProduct | null {
@@ -61,6 +64,11 @@ function mapProduct(raw: RawProduct): GiftProduct | null {
   const image = raw.images?.[0]
   if (typeof image?.cleaned_url === 'string') product.image = image.cleaned_url
   else if (typeof image?.url === 'string') product.image = image.url
+  const genre = raw.structured_attributes?.genre
+  if (Array.isArray(genre)) {
+    const genres = genre.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length < 60).slice(0, 5)
+    if (genres.length) product.genres = genres
+  }
   const category = raw.category
   if (typeof category?.slug === 'string' && typeof category.title === 'string') {
     product.category = { slug: category.slug, title: category.title, path: (category.path ?? []).flatMap((part) =>
@@ -114,7 +122,8 @@ export class Channel3Client {
     const normalized = query.trim().replace(/\s+/g, ' ').toLowerCase()
     const limit = opts.limit
     const maxPrice = opts.maxPrice
-    const cacheKey = `channel3:${JSON.stringify({ query: normalized, limit, maxPrice })}`
+    // v2: products now carry the shop domain and book genres.
+    const cacheKey = `channel3:v2:${JSON.stringify({ query: normalized, limit, maxPrice })}`
     try {
       const hit = await this.cache.get(cacheKey)
       if (hit !== null) {
