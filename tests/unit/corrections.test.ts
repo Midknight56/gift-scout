@@ -36,7 +36,9 @@ async function run(message: string, state: ConversationState, turns: ToolCall[][
     const url = new URL(String(input))
     urls.push(url)
     let body: unknown
-    if (url.pathname === '/search') {
+    if (url.pathname === '/search' && url.searchParams.get('query') === 'single malt') {
+      body = { results: [{ entity_id: A, name: 'Lagavulin', types: ['urn:entity:brand'] }] }
+    } else if (url.pathname === '/search') {
       const name = url.searchParams.get('query') === 'Birch' ? 'Birch' : 'Aspen'
       body = { results: [{ entity_id: name === 'Aspen' ? A : B, name, types: ['urn:entity:artist'] }] }
     } else if (url.pathname === '/v2/tags') {
@@ -301,5 +303,22 @@ describe('taking back an interest', () => {
     })
     expect(html).toContain('Birch 100%')
     expect(html).not.toContain('Aspen')
+  })
+})
+
+describe('leaving out an interest from its button', () => {
+  it('drops single malt after it resolved to Lagavulin, withdraws its cards and marks mixed evidence stale', async () => {
+    const old = await run('He loves single malt and Birch.', newState('leave-out'), [
+      [tc('plan_scout', { loves: [{ name: 'single malt', kind: 'drink' }, { name: 'Birch', kind: 'named' }] })], [present()],
+    ])
+    const shown = old.state.cards
+    expect(shown.length).toBe(1)
+    expect(shown[0].seeds).toEqual(expect.arrayContaining(['Lagavulin', 'Birch']))
+    const next = await run('Drop single malt.', old.state, [[present()]])
+    expect(next.events.find((e) => e.t === 'cards_withdrawn')).toEqual({ t: 'cards_withdrawn', cards: [shown[0].id], names: ['single malt'] })
+    expect(next.state.cards.some((card) => card.seeds.includes('Lagavulin'))).toBe(false)
+    expect(next.state.found[E]).toMatchObject({ seeds: ['Birch'], stale: true })
+    expect(contextFor(next.state, 'More')).not.toContain('Cedar (affinity')
+    expect(next.events.find((e) => e.t === 'say')).toEqual({ t: 'say', text: 'Dropped what came from single malt: A gift from Cedar.' })
   })
 })

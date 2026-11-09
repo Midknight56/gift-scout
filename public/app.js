@@ -171,6 +171,42 @@ function selectCard(cardEl) {
   cardEl.classList.add('is-selected');
 }
 
+/** One "Leave out" button per interest behind the current cards, for the owner of a live conversation only. */
+function drawLeaveOut() {
+  walkPanel.querySelector('.leave-out-row')?.remove();
+  if (!canBuy || !ownerFor(conversation) || !cards.size) return;
+  const seeds = [...new Set([...cards.values()].flatMap((card) => (Array.isArray(card.seeds) ? card.seeds : [])))];
+  if (!seeds.length) return;
+  const holder = document.createElement('div');
+  holder.innerHTML = `<div class="leave-out-row" role="group" aria-label="Leave an interest out">${seeds
+    .map((seed) => `<button type="button" class="leave-out" data-leave-out="${escapeHtml(seed)}"${busy ? ' disabled' : ''}>${escapeHtml(leaveOutLabel(seed))}</button>`).join('')}</div>`;
+  walkPanel.append(holder.firstElementChild);
+}
+
+/** The words the person typed for a seed: the query of the lookup whose top result is that seed. */
+function interestFor(seed) {
+  for (const { call, result } of calls.values()) {
+    if (!['search_entities', 'search_tags'].includes(call?.tool) || !result?.ok) continue;
+    const query = typeof call.args?.query === 'string' ? call.args.query.trim() : '';
+    if (query && result.top?.[0]?.name === seed) return query;
+  }
+  return seed;
+}
+
+function leaveOutLabel(seed) {
+  const typed = interestFor(seed);
+  return typed === seed ? `Leave out ${seed}` : `Leave out ${typed} (${seed})`;
+}
+
+/** After a turn takes an interest back: what was left out and which cards were withdrawn. */
+function leaveOutResult(event, gifts) {
+  const block = document.createElement('div');
+  block.className = 'leave-out-result';
+  block.textContent = `Left out ${(event.names || []).join(' and ')}.${gifts.length ? ` Withdrawn: ${gifts.join(', ')}.` : ''}`;
+  chat.append(block);
+  scrollChat();
+}
+
 function drawCards(event) {
   const svg = walkSvg(event.cards);
   walkPanel.innerHTML = svg;
@@ -195,6 +231,7 @@ function drawCards(event) {
   chat.append(wrap);
   if (!firstCardsReady) firstCardsReady = true;
   drawCompareButton();
+  drawLeaveOut();
   for (const d of event.dropped || []) {
     const p = document.createElement('p');
     p.className = 'dropped-item';
@@ -411,6 +448,7 @@ function handleEvent(event, { live = true } = {}) {
       break;
     }
     case 'say':
+      if (chat.lastElementChild?.classList.contains('leave-out-result') && /^(Dropped what came from|Nothing shown came from) /.test(event.text)) break;
       addLine('say-line', event.text);
       break;
     case 'call':
@@ -431,6 +469,7 @@ function handleEvent(event, { live = true } = {}) {
       break;
     }
     case 'cards_withdrawn': {
+      leaveOutResult(event, event.cards.map((id) => cards.get(id)?.gift).filter(Boolean));
       for (const id of event.cards) {
         cards.delete(id);
         const card = chat.querySelector(`[data-card-id="${CSS.escape(id)}"]`);
@@ -448,6 +487,7 @@ function handleEvent(event, { live = true } = {}) {
       walkPanel.innerHTML = svg;
       delete walkPanel.dataset.selectedCard;
       walkPanel.hidden = !svg;
+      drawLeaveOut();
       break;
     }
     case 'cards':
@@ -771,6 +811,14 @@ chat.addEventListener('click', (e) => {
 chat.addEventListener('focusin', (e) => { selectCard(e.target.closest?.('.gift-card')); });
 chat.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && walkPanel.dataset.selectedCard) clearSelection();
+});
+walkPanel.addEventListener('click', (e) => {
+  const leave = e.target.closest('[data-leave-out]');
+  if (!leave || busy) return;
+  walkPanel.querySelectorAll('.leave-out').forEach((button) => { button.disabled = true; });
+  submitMessage(`Drop ${interestFor(leave.dataset.leaveOut)}.`).finally(() => {
+    walkPanel.querySelectorAll('.leave-out').forEach((button) => { button.disabled = false; });
+  });
 });
 chat.addEventListener('input', (event) => {
   if (event.target.matches('.ship-form input')) clearFieldError(event.target);
