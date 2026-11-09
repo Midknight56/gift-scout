@@ -65,7 +65,7 @@ function page() {
     structuredClone, cardHtml: () => 'card', ownerFor: () => 'owner',
     walkSvg: (items: { id: string }[]) => items.map((item) => item.id).join(','),
     addLine: (_className: string, text: string) => { lines.push(text) },
-    drawCompareButton: () => {}, scrollChat: () => {},
+    drawCompareButton: () => {}, scrollChat: () => {}, collapseEarlier: () => {},
   }
   runInNewContext(`${draw}\n${handle}\nthis.handle = handleEvent`, context)
   const handleEvent = (context as typeof context & { handle: (event: unknown, options?: { live: boolean }) => void }).handle

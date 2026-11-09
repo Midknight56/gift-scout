@@ -227,8 +227,27 @@ async function main() {
     await page.locator('.card-list').nth(1).locator('.gift-card').first().waitFor({ timeout: 120000 })
     await page.waitForTimeout(1500)
     const prices = await page.locator('.card-list').nth(1).locator('.price').allInnerTexts()
-    const highs = prices.map((p) => Number((p.match(/\$(\d+)\s*$/) ?? [])[1]))
+    const highs = prices.map((p) => Number((p.match(/\$(\d+(?:\.\d+)?)\s*$/) ?? [])[1]))
     check('the narrowing turn keeps every card at 30 dollars or less', highs.length > 0 && highs.every((h) => h <= 30), prices.join(', '))
+
+    // The current shortlist comes first: earlier cards fold into one closed box, opened from the keyboard.
+    const earlier = page.locator('details.earlier-ideas')
+    check('earlier ideas fold into one closed box', await earlier.count() === 1 && !(await earlier.evaluate((el) => el.open)), await earlier.locator('summary').innerText().catch(() => 'missing'))
+    await earlier.locator('summary').focus()
+    await page.keyboard.press('Enter')
+    check('the earlier ideas box opens from the keyboard', await earlier.evaluate((el) => el.open))
+    await page.keyboard.press('Enter')
+    const firstCall = page.locator('.card-list').nth(1).locator('.gift-card').first().locator('.call-link')
+    const callNumber = await firstCall.getAttribute('data-call')
+    await firstCall.focus()
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(600)
+    check('a card selects its graph links and its call from the keyboard',
+      await page.locator('.walk-panel').getAttribute('data-selected-card') === '1'
+      && await page.locator(`[data-call-row="${callNumber}"]`).count() === 1, `call ${callNumber}`)
+    await page.keyboard.press('Escape')
+    check('Escape clears the card selection', await page.locator('.walk-panel').getAttribute('data-selected-card') === null)
+    if (await page.locator('#sheet-close').isVisible().catch(() => false)) await page.locator('#sheet-close').click()
 
     await page.locator('[data-buy]').first().click()
     // Bad path: an address PayPal could not ship to is caught on the page, and no order is made.

@@ -282,3 +282,13 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
   .order-block { padding: 15px; }
   .scene-panel:not(.open) { transform: translateY(100%); }
 }
+
+.earlier-ideas { margin: 4px 0 12px; border: 1px solid var(--hairline); border-radius: 4px; background: var(--white); }
+.earlier-ideas > summary { min-height: 44px; padding: 10px 14px; color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; }
+.earlier-ideas > .card-list { padding: 0 12px 12px; }
+.why-more { margin: 10px 0 0; }
+.why-more > summary { display: inline-flex; min-height: 44px; align-items: center; color: var(--accent); font-size: 14px; cursor: pointer; }
+.why-more .gift-why { margin: 4px 0 0; }
+.gift-card.is-selected { border-color: var(--accent); }
+.walk-panel [data-card] { transition: opacity var(--motion); }
+.walk-panel[data-selected-card] [data-card]:not(.is-selected) { opacity: .2; }

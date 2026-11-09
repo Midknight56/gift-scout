@@ -136,11 +136,47 @@ function turnMark(turn) {
   callsList.append(mark);
 }
 
+/** After a refinement, every earlier card set moves into one closed "Earlier ideas" box, so the current cards come first. */
+function collapseEarlier() {
+  const lists = [...chat.querySelectorAll('.card-list')];
+  if (!lists.length) return;
+  let box = chat.querySelector('details.earlier-ideas');
+  if (!box) {
+    box = document.createElement('details');
+    box.className = 'earlier-ideas';
+    box.append(document.createElement('summary'));
+  }
+  for (const list of lists) {
+    list.classList.add('earlier');
+    list.querySelectorAll('.gift-card').forEach((card) => { card.classList.remove('is-selected'); delete card.dataset.cardIndex; });
+    box.append(list);
+  }
+  chat.append(box);
+  box.querySelector('summary').textContent = `Earlier ideas (${box.querySelectorAll('.gift-card').length})`;
+}
+
+function clearSelection() {
+  delete walkPanel.dataset.selectedCard;
+  walkPanel.querySelectorAll('.is-selected').forEach((el) => el.classList.remove('is-selected'));
+  chat.querySelectorAll('.gift-card.is-selected').forEach((el) => el.classList.remove('is-selected'));
+}
+
+/** Selecting a current card brings its graph links forward and fades the others. */
+function selectCard(cardEl) {
+  const index = cardEl?.dataset.cardIndex;
+  if (!index || walkPanel.dataset.selectedCard === index) return;
+  clearSelection();
+  walkPanel.dataset.selectedCard = index;
+  walkPanel.querySelectorAll(`[data-card="${CSS.escape(index)}"]`).forEach((el) => el.classList.add('is-selected'));
+  cardEl.classList.add('is-selected');
+}
+
 function drawCards(event) {
   const svg = walkSvg(event.cards);
   walkPanel.innerHTML = svg;
+  delete walkPanel.dataset.selectedCard;
   walkPanel.hidden = !svg;
-  chat.querySelectorAll('.card-list').forEach((list) => list.classList.add('earlier'));
+  collapseEarlier();
   chat.querySelectorAll('.card-actions').forEach((el) => el.remove());
   cards.clear();
   const wrap = document.createElement('div');
@@ -152,6 +188,7 @@ function drawCards(event) {
     holder.innerHTML = cardHtml(card, { buyable: canBuy && Boolean(ownerFor(conversation)) });
     const el = holder.firstElementChild;
     el.dataset.cardId = card.id;
+    el.dataset.cardIndex = String(i + 1);
     el.style.setProperty('--index', i);
     wrap.append(el);
   });
@@ -174,7 +211,8 @@ function drawCompareButton() {
   const actions = document.createElement('div');
   actions.className = 'compare-actions';
   actions.innerHTML = '<button type="button" class="buy-button quiet compare-button" data-compare>Compare with Qloo off</button>';
-  firstCardList?.after(actions);
+  const current = [...chat.querySelectorAll('.card-list')].filter((list) => !list.classList.contains('earlier')).at(-1);
+  (current ?? firstCardList)?.after(actions);
 }
 
 function drawComparison(event) {
@@ -408,6 +446,7 @@ function handleEvent(event, { live = true } = {}) {
       }
       const svg = walkSvg([...cards.values()]);
       walkPanel.innerHTML = svg;
+      delete walkPanel.dataset.selectedCard;
       walkPanel.hidden = !svg;
       break;
     }
@@ -725,7 +764,13 @@ chat.addEventListener('click', (e) => {
   const buy = e.target.closest('[data-buy]');
   if (buy) { showPayChoice(buy); return; }
   const link = e.target.closest('[data-call]');
-  if (link) { e.preventDefault(); openPanel(link.dataset.call); }
+  if (link) { e.preventDefault(); selectCard(link.closest('.gift-card')); openPanel(link.dataset.call); return; }
+  const picked = e.target.closest('.gift-card');
+  if (picked && !e.target.closest('a, button, input, summary, label')) selectCard(picked);
+});
+chat.addEventListener('focusin', (e) => { selectCard(e.target.closest?.('.gift-card')); });
+chat.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && walkPanel.dataset.selectedCard) clearSelection();
 });
 chat.addEventListener('input', (event) => {
   if (event.target.matches('.ship-form input')) clearFieldError(event.target);

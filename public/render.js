@@ -121,7 +121,7 @@ export function cardHtml(card, { buyable = false } = {}) {
     const host = merchantHost(item.url);
     product = `<div class="product-block">${image ? `<img class="product-image" src="${escapeHtml(image)}" alt="${escapeHtml(plainName(item.title))}" width="64" height="64" loading="lazy">` : ''}<div class="product-details"><strong class="product-title">${escapeHtml(plainName(item.title))}</strong>${item.brand ? `<span class="product-brand">${escapeHtml(plainName(item.brand))}</span>` : ''}${host ? `<span class="product-merchant">${escapeHtml(host)}</span>` : ''}<span class="product-price">$${Number(item.price).toFixed(2)}</span>${url ? `<a class="product-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow">See it</a>` : ''}<span class="product-credit">Found by Channel3</span></div></div>`;
   }
-  return `<article class="gift-card" style="--index:0">${kind}<div class="card-top"><h3 class="gift-name">${gift}</h3><span class="price">${price}</span></div><p class="gift-why">${why}</p>${product}<div class="because"><span class="because-seeds">${becauseSeeds}</span><span class="because-arrow" aria-hidden="true">→</span><span class="because-entity">${entity}</span><span class="affinity" role="img" aria-label="Qloo affinity ${score} of 1" title="${escapeHtml(affinityTitle)}"><span class="affinity-track"><span class="affinity-fill" style="width:${width}%"></span></span><span class="affinity-label">affinity</span><span>${score}</span></span><a class="call-link" href="#call-${Number.isFinite(call) ? call : 0}" data-call="${Number.isFinite(call) ? call : 0}">call ${Number.isFinite(call) ? call : 0}</a></div>${buyable ? `<div class="card-actions"><button type="button" class="buy-button" data-buy="${escapeHtml(card.id)}">${buyText}</button><p class="pay-disclosure">Sandbox checkout. No store order is placed. Nothing ships.</p></div>` : ''}</article>`;
+  return `<article class="gift-card" style="--index:0">${kind}<div class="card-top"><h3 class="gift-name">${gift}</h3><span class="price">${price}</span></div>${product}<div class="because"><span class="because-seeds">${becauseSeeds}</span><span class="because-arrow" aria-hidden="true">→</span><span class="because-entity">${entity}</span><span class="affinity" role="img" aria-label="Qloo affinity ${score} of 1" title="${escapeHtml(affinityTitle)}"><span class="affinity-track"><span class="affinity-fill" style="width:${width}%"></span></span><span class="affinity-label">affinity</span><span>${score}</span></span><a class="call-link" href="#call-${Number.isFinite(call) ? call : 0}" data-call="${Number.isFinite(call) ? call : 0}">call ${Number.isFinite(call) ? call : 0}</a></div><details class="why-more"><summary>Why this one</summary><p class="gift-why">${why}</p></details>${buyable ? `<div class="card-actions"><button type="button" class="buy-button" data-buy="${escapeHtml(card.id)}">${buyText}</button><p class="pay-disclosure">Sandbox checkout. No store order is placed. Nothing ships.</p></div>` : ''}</article>`;
 }
 
 /** A short count of completed Qloo tool results in the current conversation. */
@@ -212,7 +212,7 @@ export function walkSvg(cards) {
       const tag = !hasShare && tagSeeds.has(name);
       const strokeWidth = hasShare ? Math.max(1, Math.min(5, 1 + share * 4)) : tag ? 1 : 1.5;
       const title = plainName(hasShare ? `${name} ${Math.round(share * 100)}%` : name);
-      lines.push(`<line x1="${boxX + boxWidth}" y1="${favourite.y}" x2="${circleX - circleRadius}" y2="${y}" stroke="${tag ? 'var(--muted)' : 'var(--accent)'}" stroke-width="${strokeWidth}" stroke-opacity="0.75" stroke-linecap="round"${tag ? ' stroke-dasharray="3 3"' : ''}><title>${escapeHtml(title)}</title></line>`);
+      lines.push(`<line data-card="${cardIndex + 1}" x1="${boxX + boxWidth}" y1="${favourite.y}" x2="${circleX - circleRadius}" y2="${y}" stroke="${tag ? 'var(--muted)' : 'var(--accent)'}" stroke-width="${strokeWidth}" stroke-opacity="0.75" stroke-linecap="round"${tag ? ' stroke-dasharray="3 3"' : ''}><title>${escapeHtml(title)}</title></line>`);
     }
   });
 
@@ -227,7 +227,7 @@ export function walkSvg(cards) {
     const y = rowY(index, items.length);
     const name = plainName(card?.entity?.name ?? '');
     const nameLimit = charsForWidth(width - 3 - resultX);
-    return `<g><circle cx="${circleX}" cy="${y}" r="${circleRadius}" fill="var(--walk-background)" stroke="var(--hairline)"/><text x="${circleX}" y="${y + 4}" text-anchor="middle" fill="currentColor" font-size="${fontSize}">${index + 1}</text><text x="${resultX}" y="${y + 4}" fill="currentColor" font-size="${fontSize}">${escapeHtml(shorten(name, nameLimit))}</text><title>${escapeHtml(name)}</title></g>`;
+    return `<g data-card="${index + 1}"><circle cx="${circleX}" cy="${y}" r="${circleRadius}" fill="var(--walk-background)" stroke="var(--hairline)"/><text x="${circleX}" y="${y + 4}" text-anchor="middle" fill="currentColor" font-size="${fontSize}">${index + 1}</text><text x="${resultX}" y="${y + 4}" fill="currentColor" font-size="${fontSize}">${escapeHtml(shorten(name, nameLimit))}</text><title>${escapeHtml(name)}</title></g>`;
   }).join('');
   const label = `${favourites.length} ${favourites.length === 1 ? 'favourite' : 'favourites'} lead to ${items.length} gift ${items.length === 1 ? 'idea' : 'ideas'}`;
   const descriptions = items.map((card) => {
