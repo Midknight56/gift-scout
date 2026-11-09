@@ -337,7 +337,29 @@ export function compareHtml(event) {
   const coverageLine = counts
     ? `<p class="compare-coverage">Qloo knew ${coverage.plain_found} of the ${coverage.plain_total} plain ideas. ${coverage.cards_scored === coverage.cards_total ? `All ${coverage.cards_total} cards had a score.` : `${coverage.cards_scored} of the ${coverage.cards_total} cards had a score.`}</p>`
     : '';
-  return `<section class="compare-block" aria-label="Qloo off comparison"><h3>Qloo off: the plain model&#39;s picks</h3><p>This compares taste graph affinity only. It does not show whether they would like the gift or how much time it saves.</p>${coverageLine}<ul class="compare-list">${rows}</ul><p class="compare-summary">Gift Scout&#39;s cards: mean affinity ${qlooMean}. Plain model: ${plainSummary}.</p></section>`;
+  const bar = (value) => {
+    const score = Math.max(0, Math.min(1, value));
+    return `<span class="affinity compare-affinity" role="img" aria-label="Qloo affinity ${score.toFixed(2)} of 1"><span class="affinity-track"><span class="affinity-fill" style="width:${score * 100}%"></span></span><span class="affinity-label">affinity</span><span>${score.toFixed(2)}</span></span>`;
+  };
+  const own = Array.isArray(event?.cards) ? event.cards : null;
+  const ownRows = own ? own.map((card) => {
+    const affinity = Number(card?.affinity);
+    return `<li class="compare-own"><div class="compare-gift">${escapeHtml(plainName(card?.gift))}</div><div class="compare-name">${escapeHtml(plainName(card?.name))}</div>${Number.isFinite(affinity) && card?.affinity != null ? bar(affinity) : '<span class="compare-not-found">no score</span>'}</li>`;
+  }).join('') : '';
+  const message = typeof event?.message === 'string' && event.message.trim() ? event.message.trim() : '';
+  const asked = message ? `<p class="compare-asked">You asked: &quot;${escapeHtml(message)}&quot;</p><p class="compare-scope">Later changes are not part of this comparison.</p>` : '';
+  const split = ['plain_same_found', 'plain_nearest_found'].every((key) => Number.isInteger(event?.[key]) && event[key] >= 0);
+  const part = (label, value, count) => count > 0 && Number.isFinite(Number(value)) && value !== null
+    ? ` Plain model on the ${label} signals: mean affinity ${Number(value).toFixed(2)} over ${count}.` : '';
+  const summary = split
+    ? `Gift Scout&#39;s cards: mean affinity ${qlooMean}.${part('same', event.plain_same_mean, event.plain_same_found)}${part('nearest', event.plain_nearest_mean, event.plain_nearest_found)}${event.plain_same_found + event.plain_nearest_found === 0 ? ' Plain model: none found in Qloo.' : ''}${notFound ? ` ${notFound} of ${plain.length} plain ideas not found.` : ''}`
+    : `Gift Scout&#39;s cards: mean affinity ${qlooMean}. Plain model: ${plainSummary}.`;
+  const likeForLike = split && event.plain_nearest_found > 0 ? '<p class="compare-note">Scores on the nearest signals are not a like for like test.</p>' : '';
+  const plainList = `<ul class="compare-list">${rows}</ul>`;
+  const lists = own
+    ? `<div class="compare-columns"><div class="compare-column"><h4>Gift Scout&#39;s picks</h4><ul class="compare-list compare-own-list">${ownRows}</ul></div><div class="compare-column"><h4>Plain model&#39;s picks</h4>${plainList}</div></div>`
+    : plainList;
+  return `<section class="compare-block" aria-label="Comparison of the first request"><h3>Comparison of the first request</h3>${asked}<p>This compares taste graph affinity only. It does not show whether they would like the gift or how much time it saves.</p>${coverageLine}${lists}<p class="compare-summary">${summary}</p>${likeForLike}</section>`;
 }
 
 export function refundPendingRowHtml(event) {

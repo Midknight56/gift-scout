@@ -95,7 +95,7 @@ describe('render helpers', () => {
       { gift: 'A book', name: 'North Wind', kind: 'book', found: true, affinity: 0.876 },
       { gift: 'A mug', name: 'Tea Time', kind: 'brand', found: false },
     ], qloo_mean: 0.91, plain_mean: 0.78, not_found: 1 });
-    expect(html).toContain('<h3>Qloo off: the plain model&#39;s picks</h3>');
+    expect(html).toContain('<h3>Comparison of the first request</h3>');
     expect(html).toContain('A book');
     expect(html).toContain('North Wind');
     expect(html).toContain('aria-label="Qloo affinity 0.88 of 1"');

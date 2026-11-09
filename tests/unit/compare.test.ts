@@ -389,3 +389,29 @@ describe('a failed comparison', () => {
     db.close()
   })
 })
+
+describe('comparison of the first request', () => {
+  it('sends the request, the first cards and separate same and nearest means', async () => {
+    const h = setup()
+    const result = await request(h, await ownerToken(h.id, 'test'))
+    const compare = result.events.find((e) => e.t === 'compare') as Record<string, unknown>
+    expect(compare.message).toBe('My aunt loves folk music and quiet weekends.')
+    expect(compare.cards).toEqual([
+      { gift: 'A record', name: 'Card one', affinity: 0.9 },
+      { gift: 'A book', name: 'Card two', affinity: 0.7 },
+    ])
+    expect(compare).toMatchObject({ plain_same_mean: 0.8, plain_same_found: 1, plain_nearest_mean: 0.6, plain_nearest_found: 1, not_found: 1 })
+  })
+
+  it('still compares the first request after a refinement', async () => {
+    const h = setup()
+    await h.ready
+    await new Conversations(h.db).update(h.id, (fresh) => ({
+      state: { ...fresh.state, turn: 2, said: [...fresh.state.said, 'Make it cheaper, under 30 dollars.'] },
+      turns: [...fresh.turns, [{ t: 'say', text: 'Narrowed' }]],
+    }))
+    const result = await request(h, await ownerToken(h.id, 'test'))
+    const compare = result.events.find((e) => e.t === 'compare') as Record<string, unknown>
+    expect(compare.message).toBe('My aunt loves folk music and quiet weekends.')
+  })
+})

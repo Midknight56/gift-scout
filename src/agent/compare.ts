@@ -78,7 +78,7 @@ export function firstTurnContexts(turns: ScoutEvent[][]): { kinds: Map<string, S
 }
 
 export async function runCompare(o: {
-  message: string; turns: ScoutEvent[][]; cards: { entity: { affinity?: number } }[]; callStart?: number
+  message: string; turns: ScoutEvent[][]; cards: { gift?: string; entity: { name?: string; affinity?: number } }[]; callStart?: number
   qloo: QlooClient; model: Model; budget: Budget; emit(event: ScoutEvent): Promise<void>
 }): Promise<void> {
   const held = await o.budget.reserve()
@@ -144,7 +144,13 @@ export async function runCompare(o: {
   }
   const scores = plain.flatMap((idea) => idea.found && typeof idea.affinity === 'number' ? [idea.affinity] : [])
   const mean = (values: number[]) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 1000) / 1000 : null
-  await o.emit({ t: 'compare', plain, plain_mean: mean(scores), qloo_mean: mean(qlooMeans), not_found: plain.filter((idea) => !idea.found).length,
+  // Same signals and nearest signals are kept apart: a mixed mean is not a like for like score.
+  const scoresIn = (context: 'same' | 'nearest') => plain.flatMap((idea) => idea.context === context && idea.found && typeof idea.affinity === 'number' ? [idea.affinity] : [])
+  const same = scoresIn('same'), nearest = scoresIn('nearest')
+  const cards = o.cards.map((card) => ({ gift: card.gift ?? '', name: card.entity.name ?? '',
+    ...(typeof card.entity.affinity === 'number' && Number.isFinite(card.entity.affinity) ? { affinity: card.entity.affinity } : {}) }))
+  await o.emit({ t: 'compare', message: o.message, cards, plain, plain_mean: mean(scores), qloo_mean: mean(qlooMeans), not_found: plain.filter((idea) => !idea.found).length,
+    plain_same_mean: mean(same), plain_same_found: same.length, plain_nearest_mean: mean(nearest), plain_nearest_found: nearest.length,
     coverage: { plain_found: plain.filter((idea) => idea.found).length, plain_total: plain.length, cards_scored: qlooMeans.length, cards_total: o.cards.length },
   })
   await o.emit({ t: 'usage', model_calls: 1, neurons: Math.round(spent * 10) / 10 })

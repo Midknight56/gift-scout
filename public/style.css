@@ -234,6 +234,14 @@ h2 { margin: 0; font: 400 31px/1 'Instrument Serif', Georgia, serif; }
 .compare-affinity { color: var(--ink); font-size: 14px; }
 .compare-affinity .affinity-label { color: var(--muted); }
 .compare-not-found { color: var(--muted); font-size: 14px; }
+.compare-item, .compare-own { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; padding-bottom: 11px; border-bottom: 1px solid var(--hairline); }
+.compare-asked { margin: 0 0 4px; font-weight: 600; overflow-wrap: anywhere; }
+.compare-scope, .compare-note { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+.compare-note { margin: 8px 0 0; }
+.compare-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; margin-top: 12px; }
+.compare-column { min-width: 0; }
+.compare-column h4 { margin: 0 0 10px; font-size: 15px; }
+@media (min-width: 760px) { .compare-columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .compare-summary { margin: 14px 0 0; color: var(--ink); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
 /* Spacing and focus fixes from the phone sweep (tools/phones.mjs, 23 Oct): every control 44 px tall and 16 px inside
    the screen, and a visible focus ring on the text boxes too. */
