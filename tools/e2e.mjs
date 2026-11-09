@@ -244,7 +244,7 @@ async function main() {
     await page.waitForTimeout(600)
     check('a card selects its graph links and its call from the keyboard',
       await page.locator('.walk-panel').getAttribute('data-selected-card') === '1'
-      && await page.locator(`[data-call-row="${callNumber}"]`).count() === 1, `call ${callNumber}`)
+      && await page.locator(`[data-call-row="${callNumber}"].is-selected`).count() === 1, `call ${callNumber}`)
     await page.keyboard.press('Escape')
     check('Escape clears the card selection', await page.locator('.walk-panel').getAttribute('data-selected-card') === null)
     if (await page.locator('#sheet-close').isVisible().catch(() => false)) await page.locator('#sheet-close').click()
