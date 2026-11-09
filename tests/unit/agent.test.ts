@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from 'vitest'
-import { checkCards, flattenIdeas, MAX_MODEL_CALLS, newState, pickProduct, plain, productQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
+import { checkCards, flattenIdeas, MAX_MODEL_CALLS, namedGift, newState, pickProduct, plain, productQuery, productSearchQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import { neuronsFor, readReply, stripThinking, WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
 import { QlooClient, type Cache } from '../../src/qloo/client'
@@ -751,23 +751,23 @@ describe('Channel3 products', () => {
 
   it('prefixes brand searches by gender and leaves book searches alone', async () => {
     const model = scripted([reply([call('plan_scout', PLAN)]), reply([call('present_gifts', { cards: [
-      card('B-FENDER', 'A Fender strap'), card('K-HOMESICK', 'A copy of Homesick'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A trip to Seoul'),
-    ] })]), reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap'), card('K-HOMESICK', 'A copy of Homesick'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A trip to Seoul')] })])])
+      card('B-FENDER', 'A Fender hoodie'), card('K-HOMESICK', 'A copy of Homesick'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A trip to Seoul'),
+    ] })]), reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender hoodie'), card('K-HOMESICK', 'A copy of Homesick'), card('L-NAMOO', 'Dinner at Cafe Namoo'), card('D-SEOUL', 'A trip to Seoul')] })])])
     const { ctx } = qloo()
     const events: ScoutEvent[] = [], searches: unknown[] = []
     const products = { async search(query: string, opts?: { limit?: number; maxPrice?: number }) {
       searches.push({ query, opts })
-      return { ok: true as const, cached: false, products: [product('Fender woven strap', 35)] }
+      return { ok: true as const, cached: false, products: [product('Fender hoodie', 35)] }
     } }
     const next = await runTurn({ message: 'My brother. He loves Phoebe Bridgers and Korean food. He lives in Toronto. Under 60 dollars.', state: newState('conv1'), model, tools: qlooTools(), ctx, budget: budget(), products, now: () => 10, emit: (e) => { events.push(e) } })
-    expect(searches.map((search) => (search as { query: string }).query)).toEqual(["men's Fender strap", 'Homesick'])
-    expect(next.cards[0].product).toMatchObject({ title: 'Fender woven strap', price: 35, source: 'channel3' })
+    expect(searches.map((search) => (search as { query: string }).query)).toEqual(["men's Fender hoodie", 'Homesick book'])
+    expect(next.cards[0].product).toMatchObject({ title: 'Fender hoodie', price: 35, source: 'channel3' })
     expect(next.cards[1].product).toBeUndefined()
     const calls = events.filter((e) => e.t === 'call')
-    expect(calls.find((event) => event.t === 'call' && event.tool === 'search_products')).toMatchObject({ tool: 'search_products', args: { query: "men's Fender strap", max_price: 40 } })
-    expect(events.find((e) => e.t === 'result' && e.tool === 'search_products')).toMatchObject({ ok: true, text: 'Product found: title starts with the name.', top: [{ name: 'Fender woven strap', type: 'product', price: 35 }] })
+    expect(calls.find((event) => event.t === 'call' && event.tool === 'search_products')).toMatchObject({ tool: 'search_products', args: { query: "men's Fender hoodie", max_price: 40 } })
+    expect(events.find((e) => e.t === 'result' && e.tool === 'search_products')).toMatchObject({ ok: true, text: 'Product found: title starts with the name.', top: [{ name: 'Fender hoodie', type: 'product', price: 35 }] })
     const shown = events.find((e) => e.t === 'cards') as Extract<ScoutEvent, { t: 'cards' }>
-    expect(shown.cards).toEqual(expect.arrayContaining([expect.objectContaining({ product: expect.objectContaining({ id: 'Fender woven strap', title: 'Fender woven strap', price: 35, url: 'https://shop.test/item', source: 'channel3', match: 'title starts with the name' }) })]))
+    expect(shown.cards).toEqual(expect.arrayContaining([expect.objectContaining({ product: expect.objectContaining({ id: 'Fender hoodie', title: 'Fender hoodie', price: 35, url: 'https://shop.test/item', source: 'channel3', match: 'title starts with the name' }) })]))
   })
 
   it('keeps the person budget above the model plan and uses the plan when no budget was given', async () => {
@@ -957,4 +957,67 @@ it('accepts large print book editions and checks whole category words', () => {
   expect(pick(item)).toMatchObject({ match: 'exact title' })
   expect(pick({ ...item, title: 'Fallen Angel', category: { slug: 'notebooks', title: 'Notebooks', path: ['Stationery'] } })).toBeUndefined()
   expect(pick({ ...item, category: { slug: 'fiction-books', title: 'Fiction', path: [] } })).toMatchObject({ kind: 'book' })
+})
+
+describe('entity product queries', () => {
+  it('uses the paperback format or falls back to book', () => {
+    const entity = { id: 'b1', name: 'The Difference Engine', type: 'book' }
+    expect(productSearchQuery({ gift: 'A paperback copy of a gripping mystery', entity })).toBe('The Difference Engine paperback')
+    expect(productSearchQuery({ gift: 'A gripping mystery', entity })).toBe('The Difference Engine book')
+  })
+
+  it('keeps the age and name once without adding mens word for whisky', () => {
+    const entity = { id: 'lag1', name: 'Lagavulin', type: 'brand' }
+    const query = productSearchQuery({ gift: 'A bottle of Lagavulin 16 Year Old single malt', entity }, 'he')
+    expect(query).toBe('Lagavulin 16 Year Old single malt')
+    expect(query).toContain('16 Year')
+    expect(query).toContain('single malt')
+    expect(query).not.toContain("men's")
+    expect(query.match(/Lagavulin/g)).toHaveLength(1)
+  })
+
+  it('adds mens prefix for clothing brand gift with pronoun he', () => {
+    const entity = { id: 'v1', name: 'Vans', type: 'brand' }
+    const query = productSearchQuery({ gift: 'A hoodie', entity }, 'he')
+    expect(query).toBe("men's Vans hoodie")
+  })
+
+  it('namedGift preserves gifts naming the entity and renames others', () => {
+    expect(namedGift('Lagavulin 16 gift set', 'Lagavulin')).toBe('Lagavulin 16 gift set')
+    expect(namedGift('A gripping mystery', 'The Difference Engine')).toBe('The Difference Engine: a gripping mystery')
+  })
+
+  it('searches products with entity name and emits named card gift in runTurn', async () => {
+    const bookEntity = { id: '00000000-0000-4000-8000-000000000003', name: 'The Difference Engine', type: 'book' }
+    const state = laterState()
+    state.found[bookEntity.id] = { entity: bookEntity, seeds: ['Phoebe Bridgers'], from_call: 1 }
+    const model = scripted([
+      reply([call('present_gifts', { cards: [{ entity_id: bookEntity.id, gift: 'A gripping mystery', why: 'A classic story for her.', price_low: 15, price_high: 25 }] })]),
+    ])
+    const events: ScoutEvent[] = []
+    const searches: { query: string }[] = []
+    const products = {
+      async search(query: string) {
+        searches.push({ query })
+        return { ok: true as const, cached: false, products: [{ id: 'prod1', title: 'The Difference Engine', price: 20, currency: 'USD', url: 'https://shop.test/item' }] }
+      },
+    }
+    const next = await runTurn({
+      message: 'Show me ideas',
+      state,
+      model,
+      tools: qlooTools(),
+      ctx: qloo().ctx,
+      budget: budget(),
+      products,
+      emit: (e) => { events.push(e) },
+    })
+    const productCall = events.find((e): e is Extract<ScoutEvent, { t: 'call' }> => e.t === 'call' && e.tool === 'search_products')
+    expect(productCall).toBeDefined()
+    expect(productCall?.args.query).toContain('The Difference Engine')
+    expect(searches[0]?.query).toContain('The Difference Engine')
+    expect(next.cards[0].gift).toBe('The Difference Engine: a gripping mystery')
+    const cardsEvent = events.find((e) => e.t === 'cards') as Extract<ScoutEvent, { t: 'cards' }>
+    expect(cardsEvent.cards[0].gift).toBe('The Difference Engine: a gripping mystery')
+  })
 })
