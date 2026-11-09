@@ -11,7 +11,7 @@ import type { Card, Dropped, Found, ScoutEvent } from './events'
 import { neuronsFor, type ChatMessage, type Model, type ToolSpec } from './model'
 import { carryOut, PLAN_SCOUT, type Plan, type Ran } from './plan'
 import { SYSTEM_PROMPT } from './prompt'
-import { fixWhyPronouns, pronounsFromMessage } from './pronouns'
+import { fixWhyPronouns, pronounsFromMessage, type PronounSet } from './pronouns'
 import { budgetIn, interestKey, plain, saidIn, takenBack } from './text'
 import type { Attempt } from './buy'
 import { matchesGiftType } from './product-type'
@@ -379,12 +379,84 @@ export function pickProduct(products: SearchResult, entityName: string, entityTy
   return best ? { product: best.product, match: best.match, ...(best.kind ? { kind: best.kind } : {}) } : undefined
 }
 
+function bookFormat(gift: string): string {
+  const lower = gift.toLowerCase()
+  if (/\b(?:paperback|softcover|softback)\b/i.test(lower)) return 'paperback'
+  if (/\b(?:hardcover|hardback)\b/i.test(lower)) return 'hardcover'
+  if (/\b(?:audiobook|audio\s*book)\b/i.test(lower)) return 'audiobook'
+  if (/\b(?:ebook|e book|kindle)\b/i.test(lower)) return 'ebook'
+  return 'book'
+}
+
+const CLOTHING_GIFT = /\b(?:shirts?|tees?|t\s*shirts?|hoodies?|sweatshirts?|jackets?|hats?|caps?|socks|sweaters?)\b/i
+
+function accentCharPattern(name: string): string {
+  const charMap: Record<string, string> = {
+    a: '[aàáâãäåā]',
+    c: '[cçć]',
+    e: '[eèéêëē]',
+    i: '[iìíîïī]',
+    o: '[oòóôõöøō]',
+    u: '[uùúûüū]',
+    n: '[nñń]',
+  }
+  const clean = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return clean
+    .split('')
+    .map((ch) => {
+      const lower = ch.toLowerCase()
+      if (charMap[lower]) return charMap[lower]
+      return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    })
+    .join('')
+    .replace(/\s+/g, '\\s+')
+}
+
+function removeEntityWords(text: string, entityName: string): string {
+  const pattern = accentCharPattern(entityName)
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, 'giu')
+  return text.replace(re, ' ')
+}
+
+export function productSearchQuery(card: Pick<Card, 'gift' | 'entity'>, pronoun?: PronounSet | null): string {
+  const entityName = plain(card.entity.name)
+  if (card.entity.type === 'book') {
+    return `${entityName} ${bookFormat(card.gift)}`
+  }
+  let text = card.gift.replace(new RegExp(`^${entityName.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}:\\s*`, 'i'), '')
+  text = productQuery(text)
+  const withoutEntity = removeEntityWords(text, card.entity.name)
+  const objectWords = withoutEntity
+    .replace(/^['’]s\b/i, '')
+    .replace(/^[,\s;:-]+|[,\s;:-]+$/g, '')
+    .replace(/\s+(?:from|by|at|for|of)$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  const baseQuery = objectWords ? `${entityName} ${objectWords}` : entityName
+  const isClothing = CLOTHING_GIFT.test(card.gift)
+  if (isClothing && (pronoun === 'he' || pronoun === 'she')) {
+    const prefix = pronoun === 'he' ? "men's " : "women's "
+    const hasPrefix = pronoun === 'he' ? /\bmen['’]?s\b/i.test(baseQuery) : /\bwomen['’]?s\b/i.test(baseQuery)
+    if (!hasPrefix) return prefix + baseQuery
+  }
+  return baseQuery
+}
+
+export function namedGift(gift: string, entityName: string): string {
+  const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const g = ' ' + fold(gift) + ' '
+  const e = ' ' + fold(entityName) + ' '
+  if (g.includes(e)) return gift
+  const clean = plain(gift)
+  const lowerFirst = clean ? clean.charAt(0).toLowerCase() + clean.slice(1) : ''
+  return `${plain(entityName)}: ${lowerFirst}`
+}
+
 async function attachProducts(cards: Card[], state: ConversationState, products: NonNullable<TurnOptions['products']>, emit: TurnOptions['emit'], now: () => number): Promise<void> {
   const eligible = cards.filter((card) => ['brand', 'book', 'podcast', 'artist'].includes(card.entity.type))
   await Promise.all(eligible.map(async (card) => {
-    const gender = pronounsFromMessage(state.said[0] ?? '')
-    const prefix = card.entity.type === 'brand' && gender ? (gender === 'he' ? "men's " : "women's ") : ''
-    const query = prefix + productQuery(card.gift)
+    const pronoun = pronounsFromMessage(state.said[0] ?? '')
+    const query = productSearchQuery(card, pronoun)
     const n = ++state.calls
     const args = { query, max_price: card.price_high }
     await emit({ t: 'call', n, tool: 'search_products', args })
@@ -639,6 +711,9 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
           retried = true
           answer(`Only ${cards.length} kept.${unusedKinds(state, cards)}`)
           continue
+        }
+        for (const card of cards) {
+          card.gift = namedGift(card.gift, card.entity.name)
         }
         state.cards = cards
         if (budgetMax !== undefined) state.budget_max = budgetMax
