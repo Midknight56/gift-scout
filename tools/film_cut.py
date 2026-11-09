@@ -17,10 +17,19 @@ OUT = OUT_DIR / "gift-scout-film.mp4"
 FPS = 30
 RATE = 48000
 FONT = "C\\:/Windows/Fonts/seguisb.ttf"
+BANNED_WORDS = ("sandbox", "test money", "test card", "fake", "pretend", "for this demo")
+BANNED_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(w).replace(r"\ ", r"\s+") for w in BANNED_WORDS) + r")\b",
+    re.IGNORECASE,
+)
 
 
 def has_forbidden_dash(text):
     return bool(re.search(r"\w[-\u2013\u2014]\w|[\u2013\u2014]", text))
+
+
+def has_banned_words(text):
+    return bool(text and BANNED_PATTERN.search(str(text)))
 
 
 def resolve_time(value, beats):
@@ -65,6 +74,8 @@ def validate_captions(captions, film_length):
             raise ValueError("Caption length must be positive")
         if has_forbidden_dash(cue["text"]):
             raise ValueError(f"Caption contains a dash: {cue['text']}")
+        if has_banned_words(cue["text"]):
+            raise ValueError(f"Caption contains a banned word: {cue['text']}")
         if len(cue["text"]) > 70:
             raise ValueError(f"Caption exceeds 70 characters: {cue['text']}")
         if cue["end"] > film_length:
@@ -73,6 +84,41 @@ def validate_captions(captions, film_length):
         if current["start"] < previous["end"]:
             raise ValueError("Captions overlap on the film clock")
     return ordered
+
+
+def place_voice(script, beats, segments, durations, film_length):
+    placed = []
+    lines = script.get("lines", []) if isinstance(script, dict) else script
+    for line in lines:
+        ident = line["id"]
+        beat = line.get("beat")
+        if beat not in beats:
+            raise ValueError(f"Unknown beat: {beat}")
+        start = source_to_film(float(beats[beat]["at"]), segments)
+        if start is None:
+            raise ValueError(f"Beat outside segments: {beat}")
+        if ident not in durations or durations[ident] is None:
+            raise ValueError(f"Missing duration for line: {ident}")
+        duration = float(durations[ident])
+        text = str(line.get("text", ""))
+        if has_forbidden_dash(text):
+            raise ValueError(f"Voice line contains a dash: {text}")
+        if has_banned_words(text):
+            raise ValueError(f"Voice line contains a banned word: {text}")
+        at = round(start + float(line.get("offset", 0.0)), 3)
+        end = round(at + duration, 3)
+        entry = dict(line)
+        entry["at"] = at
+        entry["end"] = end
+        placed.append(entry)
+    placed.sort(key=lambda item: item["at"])
+    for line in placed:
+        if line["end"] > film_length:
+            raise ValueError(f"Voice line ends past the film: {line['id']}")
+    for previous, current in zip(placed, placed[1:]):
+        if previous["end"] > current["at"]:
+            raise ValueError(f"Voice line {previous['id']} overlaps {current['id']}")
+    return placed
 
 
 def check_length(length, target):
@@ -229,13 +275,57 @@ def run():
             if mapped is not None:
                 click_times.append(mapped)
     make_music(music, length, click_times)
-    base_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-i", str(music),
+    audio = music
+    voice_script_file = ROOT / "docs" / "voice-script.json"
+    if voice_script_file.is_file():
+        script = json.loads(voice_script_file.read_text(encoding="utf-8-sig"))
+        durations = {}
+        for line in script.get("lines", []):
+            ident, take = line["id"], line["take"]
+            take_path = OUT_DIR / "voice" / f"{ident}-take{take}.mp3"
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(take_path)],
+                capture_output=True, text=True,
+            )
+            if probe.returncode == 0 and probe.stdout.strip():
+                try:
+                    durations[ident] = float(probe.stdout.strip())
+                except ValueError:
+                    pass
+        placed = place_voice(script, beats, segments, durations, length)
+        (OUT_DIR / "voice-placed.json").write_text(
+            json.dumps(placed, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        mix = OUT_DIR / "mix.wav"
+        if placed:
+            inputs = ["-i", str(music)]
+            delays = []
+            for i, line in enumerate(placed):
+                take_file = OUT_DIR / "voice" / f"{line['id']}-take{line['take']}.mp3"
+                inputs.extend(["-i", str(take_file)])
+                delay_ms = int(round(line["at"] * 1000))
+                delays.append(f"[{i + 1}:a]aresample={RATE},aformat=channel_layouts=stereo,adelay={delay_ms}:all=1[v{i}]")
+            labels = "".join(f"[v{i}]" for i in range(len(placed)))
+            graph_parts = list(delays)
+            graph_parts.append(f"{labels}amix=inputs={len(placed)}:normalize=0,apad=whole_dur={length:.3f}[voice]")
+            graph_parts.append("[voice]asplit=2[voice_audible][voice_sc]")
+            graph_parts.append("[0:a][voice_sc]sidechaincompress=threshold=0.02:ratio=6:attack=15:release=350[ducked]")
+            graph_parts.append("[ducked][voice_audible]amix=inputs=2:normalize=0:weights='1 1.6'[mix]")
+            mix_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"] + inputs + [
+                "-filter_complex", ";".join(graph_parts), "-map", "[mix]",
+                "-c:a", "pcm_s16le", "-ar", str(RATE), "-t", f"{length:.3f}", str(mix)
+            ]
+            subprocess.run(mix_cmd, cwd=OUT_DIR, check=True)
+            audio = mix
+        else:
+            shutil.copyfile(music, mix)
+            audio = mix
+    base_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-i", str(audio),
                 "-filter_complex_script", graph_file.name, "-map", "[vout]", "-map", "1:a",
                 "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
                 "-c:a", "aac", "-b:a", "192k", "-ar", str(RATE), "-t", f"{length:.3f}", "-movflags", "+faststart"]
-    # The audio track is the music file alone, so the first pass measures it directly (fast, and at a log level that
-    # prints loudnorm's measurements).
-    analysis = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(music), "-t", f"{length:.3f}", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"], cwd=OUT_DIR, capture_output=True, text=True)
+    # The audio track is mix.wav when voice is present or music.wav alone, measured directly in the first pass.
+    analysis = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(audio), "-t", f"{length:.3f}", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"], cwd=OUT_DIR, capture_output=True, text=True)
     if analysis.returncode:
         raise SystemExit(analysis.stderr.strip())
     match = re.search(r"\{\s*\"input_i\".*?\}", analysis.stderr, re.S)

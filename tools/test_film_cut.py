@@ -1,5 +1,5 @@
 """Small checks for the film cutter's timeline and plan rules."""
-from film_cut import build_timeline, check_length, has_forbidden_dash, source_to_film, validate_captions
+from film_cut import build_timeline, check_length, has_forbidden_dash, has_banned_words, place_voice, source_to_film, validate_captions
 
 
 def equal(actual, expected, label):
@@ -38,6 +38,27 @@ def main():
         {"text": "Second", "start": 2.9, "end": 4.0},
     ], 10.0), "caption overlap")
     print("PASS overlap check")
+
+    equal(has_banned_words("Pay with the sandbox test card."), True, "sandbox and test card")
+    equal(has_banned_words("No real money moves, it is fake."), True, "fake")
+    equal(has_banned_words("Just pretend to pay."), True, "pretend")
+    equal(has_banned_words("Shown for this demo only."), True, "for this demo")
+    equal(has_banned_words("Uses test money."), True, "test money")
+    equal(has_banned_words("PayPal captures the payment."), False, "clean line")
+    raises(lambda: validate_captions([{"text": "Sandbox checkout.", "start": 1.0, "end": 2.0}], 10.0), "caption with sandbox")
+    print("PASS banned words check")
+
+    script = {"lines": [
+        {"id": "a", "beat": "start", "offset": 0.5, "take": 1, "text": "One."},
+        {"id": "b", "beat": "middle", "offset": 0.0, "take": 1, "text": "Two."},
+    ]}
+    placed = place_voice(script, beats, segments, {"a": 2.0, "b": 3.0}, length)
+    equal([(line["id"], line["at"], line["end"]) for line in placed], [("a", 0.5, 2.5), ("b", 5.0, 8.0)], "voice placed on the film clock")
+    raises(lambda: place_voice(script, beats, segments, {"a": 6.5, "b": 3.0}, length), "voice line runs into the next")
+    raises(lambda: place_voice(script, beats, segments, {"a": 2.0, "b": 14.0}, length), "voice line runs past the film")
+    raises(lambda: place_voice(script, beats, segments, {"a": 2.0}, length), "voice take missing")
+    raises(lambda: place_voice({"lines": [{"id": "c", "beat": "start", "offset": 0, "take": 1, "text": "A sandbox payment."}]}, beats, segments, {"c": 1.0}, length), "voice line with sandbox")
+    print("PASS voice placement")
 
     check_length(170.0, [165, 175])
     raises(lambda: check_length(180.0, [165, 175]), "film length")
