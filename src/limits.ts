@@ -82,8 +82,10 @@ export const TURN_START_NEURONS = 400
 
 /** "Buy this one" taps per visitor a day. Each makes one PayPal sandbox order and one model call (at most 135 neurons). */
 export const DAILY_BUYS_PER_VISITOR = 6
-/** One model call and up to 12 Qloo calls, cached. */
-export const DAILY_COMPARES_PER_VISITOR = 3
+/** Each compare is one model call, counted in Gift Scout's neuron share (one atomic insert in the ledger, under the
+ *  account cap of 9,500, under the free 10,000), so a visitor's sixth compare still costs $0; the cap only stops one
+ *  visitor from using the whole share. */
+export const DAILY_COMPARES_PER_VISITOR = 6
 
 /** The pause between events of a cached or recorded run: a first turn of about 15 events reads in about 3 seconds. */
 export const REPLAY_PACE_MS = 160

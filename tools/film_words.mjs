@@ -19,6 +19,8 @@ export function cleanShowcaseText(text) {
     [/\bPayPal sandbox\b/gi, 'PayPal'],
     [/\bGift Scout sandbox\b/gi, 'Gift Scout'],
     [/\btest tracker\b/gi, (m) => (m[0] === 'T' ? 'Tracker' : 'tracker')],
+    [/\bsamples\b/gi, (m) => (m[0] === 'S' ? 'Minis' : 'minis')],
+    [/\bsample\b/gi, (m) => (m[0] === 'S' ? 'Mini' : 'mini')],
     [/\btest card\b/gi, 'card'],
     [/\bsand ?box\b/gi, ''],
   ]
@@ -49,6 +51,8 @@ export function pageCleaner() {
       [/\bPayPal sandbox\b/gi, 'PayPal'],
       [/\bGift Scout sandbox\b/gi, 'Gift Scout'],
       [/\btest tracker\b/gi, (m) => (m[0] === 'T' ? 'Tracker' : 'tracker')],
+      [/\bsamples\b/gi, (m) => (m[0] === 'S' ? 'Minis' : 'minis')],
+      [/\bsample\b/gi, (m) => (m[0] === 'S' ? 'Mini' : 'mini')],
       [/\btest card\b/gi, 'card'],
       [/\bsand ?box\b/gi, ''],
     ]

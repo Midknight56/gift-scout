@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('cloudflare:workers', () => ({ DurableObject: class {} }))
 import worker, { type Env } from '../../src/worker'
 import { ownerToken } from '../../src/app/buy'
-import { dailyNeuronShare, perVisitor, publicLimit, visitorLimit, JUDGE_TURNS, JUDGE_BUYS, JUDGE_COMPARES } from '../../src/limits'
+import { dailyNeuronShare, perVisitor, publicLimit, visitorLimit, JUDGE_TURNS, JUDGE_BUYS, JUDGE_COMPARES, DAILY_COMPARES_PER_VISITOR } from '../../src/limits'
 
 const env = { SESSION_SECRET: 'test', JUDGE_PASS: 'private pass', ASSETS: { fetch: async () => new Response('asset') } } as unknown as Env
 const call = (path: string, extra: Partial<Env> = {}) => worker.fetch(new Request('https://gift.test' + path), { ...env, ...extra }, {} as ExecutionContext)
@@ -62,11 +62,15 @@ describe('reserved caps', () => {
       expect(publicLimit(total, reserve, false, outside)).toBe(total)
       expect(publicLimit(total, reserve, true, outside)).toBe(total)
     }
-    for (const [normal, signed] of [[12, JUDGE_TURNS], [6, JUDGE_BUYS], [3, JUDGE_COMPARES], [150, 600], [30, 120]]) {
+    for (const [normal, signed] of [[12, JUDGE_TURNS], [6, JUDGE_BUYS], [DAILY_COMPARES_PER_VISITOR, JUDGE_COMPARES], [150, 600], [30, 120]]) {
       expect(visitorLimit(normal, true, signed, inside)).toBe(signed)
       expect(visitorLimit(normal, false, signed, inside)).toBe(normal * 4)
       expect(visitorLimit(normal, true, signed, outside)).toBe(normal)
       expect(visitorLimit(normal, false, signed, outside)).toBe(normal)
     }
+  })
+
+  it('allows 6 daily compares per visitor in normal times', () => {
+    expect(DAILY_COMPARES_PER_VISITOR).toBe(6)
   })
 })

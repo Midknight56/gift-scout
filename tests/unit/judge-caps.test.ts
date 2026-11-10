@@ -113,7 +113,7 @@ describe('worker judging limits', () => {
     const pending: Promise<unknown>[] = [], ctx = { waitUntil: (p: Promise<unknown>) => pending.push(p) } as unknown as ExecutionContext
     try {
       globalThis.fetch = (async () => Response.json({ results: { entities: [] } })) as typeof fetch
-      for (const [at, expected] of [['2026-11-03T12:00:00Z', 12], ['2026-11-07T12:00:00Z', 3]] as const) {
+      for (const [at, expected] of [['2026-11-03T12:00:00Z', 24], ['2026-11-07T12:00:00Z', 6]] as const) {
         clock.now = () => Date.parse(at); limits.length = 0
         const response = await worker.fetch(new Request('https://gift.test/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation: id, owner: await ownerToken(id, 'test') }) }), env, ctx)
         await response.text(); await Promise.all(pending.splice(0))

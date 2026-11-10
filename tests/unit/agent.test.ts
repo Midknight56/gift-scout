@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from 'vitest'
-import { checkCards, flattenIdeas, MAX_MODEL_CALLS, namedGift, newState, pickProduct, plain, productQuery, productSearchQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
+import { checkCards, contextFor, flattenIdeas, MAX_MODEL_CALLS, namedGift, newState, pickProduct, plain, productQuery, productSearchQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import { neuronsFor, readReply, stripThinking, WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
 import { QlooClient, type Cache } from '../../src/qloo/client'
@@ -372,6 +372,15 @@ describe('a later turn: the free tool loop', () => {
     const said = events.filter((e) => e.t === 'say' || e.t === 'error')
     expect(said.length).toBeGreaterThan(0)
     expect(state.cards.length).toBeGreaterThan(0)
+  })
+
+  it('suppresses plan dump replies on a later turn', async () => {
+    const plan = '**Step 1** ```json\n{"a":1}\n```'
+    const model = scripted([reply([], plan), reply([], plan)])
+    const initial = { ...laterState(), cards: [{ id: 't1c1', gift: 'A Fender strap', why: 'A good fit for her.', price_low: 20, price_high: 40, entity: { id: 'B-FENDER', name: 'Fender', type: 'brand' }, seeds: ['Phoebe Bridgers'], from_call: 1 }] }
+    const { events } = await turn(model, 'More ideas', initial)
+    const says = events.filter((e): e is Extract<ScoutEvent, { t: 'say' }> => e.t === 'say')
+    expect(says.some((e) => e.text.includes('```') || e.text.includes('{'))).toBe(false)
   })
 
   it('asks the model for low reasoning effort on a later turn', async () => {
@@ -1094,5 +1103,18 @@ describe('entity product queries', () => {
     expect(next.cards[0].gift).toBe('The Difference Engine: a gripping mystery')
     const cardsEvent = events.find((e) => e.t === 'cards') as Extract<ScoutEvent, { t: 'cards' }>
     expect(cardsEvent.cards[0].gift).toBe('The Difference Engine: a gripping mystery')
+  })
+
+  it('includes active seeds in contextFor after an interest is dropped', () => {
+    const state: ConversationState = {
+      ...newState('test'),
+      seed_interests: { A: ['Le Carre novels'], B: ['single malt'] },
+      names: { A: 'John le Carré', B: 'Lagavulin' },
+      dropped_interests: ['single malt'],
+    }
+    const context = contextFor(state, 'x')
+    expect(context).toContain('A')
+    expect(context).toContain('John le Carré')
+    expect(context).not.toContain('B')
   })
 })

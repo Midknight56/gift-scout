@@ -307,6 +307,15 @@ async function dropInterests(state: ConversationState, names: string[], emit: Tu
 export function contextFor(state: ConversationState, message: string): string {
   const lines = [`Earlier they said: ${state.said.join(' / ')}`]
   if (state.dropped_interests?.length) lines.push(`They no longer want: ${state.dropped_interests.join(' and ')}. Do not use them as seeds.`)
+  const seeds: string[] = []
+  for (const id of Object.keys(state.seed_interests ?? {})) {
+    const name = state.names[id] ?? id
+    if (seedDropped(state, name)) continue
+    const type = state.found[id]?.entity.type
+    const typePart = type ? ` [${type}]` : ''
+    seeds.push(`${name}${typePart} id ${id}`)
+  }
+  if (seeds.length) lines.push(`Their interests in the taste graph (use these ids as seed_ids): ${seeds.join(', ')}`)
   const found = eligibleFound(state)
   if (found.length) {
     lines.push('Results taste_insights already gave (you may use these ids again):')
@@ -481,6 +490,14 @@ async function attachProducts(cards: Card[], state: ConversationState, products:
   }))
 }
 
+export function looksLikePlan(text: string): boolean {
+  if (text.includes('```')) return true
+  return text.split('\n').some((line) => {
+    const trimmed = line.trimStart()
+    return trimmed.startsWith('{') || trimmed.startsWith('[')
+  })
+}
+
 /** Runs one turn. Emits every event except `run` and `done`, which belong to the caller. Returns the new state.
  *  A first turn is plan, then present: the model names what they love, code asks Qloo, the model writes the cards.
  *  A later turn is a free tool loop over the Qloo tools, ending in present_gifts. */
@@ -652,11 +669,11 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
         messages.push({ role: 'user', content: hint(offered) })
         continue
       }
-      if (reply.content && !reply.cut) await o.emit({ t: 'say', text: plain(reply.content) })
+      if (reply.content && !reply.cut && !looksLikePlan(reply.content)) await o.emit({ t: 'say', text: plain(reply.content) })
       break
     }
 
-    if (reply.content && !reply.cut) await o.emit({ t: 'say', text: plain(reply.content) })
+    if (reply.content && !reply.cut && !looksLikePlan(reply.content)) await o.emit({ t: 'say', text: plain(reply.content) })
     step++
     messages.push({ role: 'assistant', content: reply.content, tool_calls: reply.tool_calls })
     let refused = 0
