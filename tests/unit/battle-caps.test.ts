@@ -9,7 +9,7 @@ import { EXAMPLES, scoutTurn, type RecordedRun, type ScoutDeps } from '../../src
 import { buyTurn, ownerToken, tokenMatchesOwner } from '../../src/app/buy'
 import { qlooTools } from '../../src/qloo/tools'
 import { QlooClient, type Cache } from '../../src/qloo/client'
-import { DAILY_BUYS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DEFAULT_DAILY_NEURONS, DEFAULT_ACCOUNT_NEURONS, MAX_CALL_NEURONS } from '../../src/limits'
+import { DAILY_BUYS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DEFAULT_DAILY_NEURONS, DEFAULT_ACCOUNT_NEURONS, MAX_CALL_NEURONS, TURN_START_NEURONS } from '../../src/limits'
 import { NeuronLedger, Conversations, RunCache } from '../../src/store/d1'
 import { DailyCounter } from '../../src/worker'
 import type { ScoutEvent } from '../../src/agent/events'
@@ -82,6 +82,54 @@ describe('cap battle tests', () => {
     expect(events.some((e) => e.t === 'error' && /budget for today/.test(e.text))).toBe(true)
     expect(events.at(-1)?.t).toBe('done')
     expect(events.some((e) => e.t === 'cards')).toBe(false)
+  })
+
+  it.each([1600, 1700, 1850, 1999])('a turn that starts at %i spent never takes the day past the 2,000 neuron cap, even when every call costs its whole hold', async (start) => {
+    const ledgerDb = db()
+    const ledger = new NeuronLedger(ledgerDb, { app: 'gift-scout', dailyCap: 2000, accountCap: 9500, reserve: MAX_CALL_NEURONS, turnStart: TURN_START_NEURONS, day: () => 'battle-day' })
+    ledgerDb.insertCall('gift-scout', 'battle-day', start)
+    let held = 0
+    const budget: Budget = { allow: () => ledger.allow(), reserve: async (n?: number) => { held = n ?? MAX_CALL_NEURONS; return ledger.reserve(n) } }
+    // The worst case for this test: each call really costs every neuron it held.
+    const model = { name: 'costs its hold', calls: 0, async chat() {
+      model.calls++
+      return model.calls === 1 ? reply([call('plan_scout', { loves: [{ name: 'Phoebe Bridgers', kind: 'named' }] })], { neurons: held })
+        : model.calls === 2 ? reply([], { content: 'Thinking.', neurons: held })
+          : reply([call('present_gifts', { cards: [{ entity_id: 'B-1', gift: 'A Fender strap', why: 'A good gift for her.', price_low: 20, price_high: 40 }] })], { neurons: held })
+    } }
+    const events = await streamTurn(scoutDeps(model, budget), 'My sister loves Phoebe Bridgers.')
+    const spent = await ledger.spentToday()
+    expect(spent.app).toBeLessThanOrEqual(2000)
+    if (start > 2000 - TURN_START_NEURONS) {
+      expect(model.calls).toBe(0)
+      expect(events.some((e) => e.t === 'error' && /budget for today/.test(e.text))).toBe(true)
+    }
+  })
+
+  it.each([1200, 1400, 1600])('a long later turn that starts at %i spent stops at the 2,000 neuron cap, even when every call costs its whole hold', async (start) => {
+    const ledgerDb = db()
+    const ledger = new NeuronLedger(ledgerDb, { app: 'gift-scout', dailyCap: 2000, accountCap: 9500, reserve: MAX_CALL_NEURONS, turnStart: TURN_START_NEURONS, day: () => 'battle-day' })
+    ledgerDb.insertCall('gift-scout', 'battle-day', start)
+    let held = 0
+    const holds: number[] = []
+    const budget: Budget = { allow: () => ledger.allow(), reserve: async (n?: number) => { held = n ?? MAX_CALL_NEURONS; const r = await ledger.reserve(n); if (r) holds.push(held); return r } }
+    // A long conversation: many earlier results make each call hold about 150 to 250 neurons.
+    const state = { ...newState('long'), turn: 1, said: ['My sister loves Phoebe Bridgers.'], names: { PB: 'Phoebe Bridgers' } }
+    for (let i = 0; i < 120; i++) state.found[`B-${i}`] = { entity: { id: `B-${i}`, name: `Brand number ${i} with a long name`, type: 'brand', affinity: 0.8 }, seeds: ['Phoebe Bridgers'], from_call: 1 }
+    let calls = 0
+    // Every call asks Qloo again and costs every neuron it held, so the turn keeps going until the ledger says no.
+    const model: Model = { name: 'costs its hold', async chat() {
+      calls++
+      return reply([call('taste_insights', { seed_ids: ['PB'], target_type: 'brand', take: calls })], { neurons: held })
+    } }
+    expect(await ledger.allow()).toBe(true)
+    const events: ScoutEvent[] = []
+    await runTurn({ message: 'Cheaper please.', state, model, tools: qlooTools(), ctx: qloo(async () => true), budget, emit: (e) => { events.push(e) } })
+    const spent = await ledger.spentToday()
+    if (start < 1600) expect(holds.length).toBeGreaterThan(0)
+    expect(spent.app).toBeLessThanOrEqual(2000)
+    expect(start + holds.reduce((a, b) => a + b, 0)).toBe(spent.app)
+    expect(events.some((e) => e.t === 'error' && /budget for today/.test(e.text))).toBe(true)
   })
 
   it('stops a shared account neuron cap crossed after the first model call', async () => {
