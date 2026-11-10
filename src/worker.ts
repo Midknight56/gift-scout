@@ -39,6 +39,7 @@ export interface Env {
   DAILY_NEURONS?: string
   /** Set high in .dev.vars for local test runs; unset in production. */
   TURNS_PER_VISITOR?: string
+  COMPARES_PER_VISITOR?: string
   /** The shared PayPal sandbox app's keys (paypal-sandbox.local.txt); unset means buying is off. */
   PAYPAL_CLIENT_ID?: string
   PAYPAL_SECRET?: string
@@ -309,7 +310,7 @@ export default {
         live: env.AI && (await tasteGraphLive(env))
           ? {
               model: new WorkersAiModel(env.AI), qloo: (await qlooFor(request, env, ctx, judge)).qloo, budget: ledgerFor(env, judge),
-              takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), visitorLimit(DAILY_COMPARES_PER_VISITOR, judge, JUDGE_COMPARES)),
+              takeVisitorCompare: () => counter(env, 'compares:' + visitor).take(today(), Number(env.COMPARES_PER_VISITOR ?? visitorLimit(DAILY_COMPARES_PER_VISITOR, judge, JUDGE_COMPARES))),
             }
           : null,
       }, stream.send)
