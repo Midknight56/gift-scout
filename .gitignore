@@ -6,3 +6,4 @@ notes
 private/
 out
 __pycache__/
+tools/film_voice.py

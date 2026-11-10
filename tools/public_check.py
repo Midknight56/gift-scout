@@ -31,6 +31,7 @@ def _scan_expression():
             "ai" + " helper",
             "ai" + " worker",
             "sub" + "agent",
+            _backwards("sbalnevele"),
         )
     )
 
