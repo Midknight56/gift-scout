@@ -611,7 +611,11 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
     }
     let reply
     try {
-      reply = await o.model.chat(messages, offeredSpecs, MAX_OUTPUT_TOKENS)
+      // Measured 9 Nov 2026: default effort hit length at 1400 completion tokens with only reasoning and no cards.
+      // reasoning_effort low answered in 717 tokens with ideas, keeping later turns within token limits.
+      reply = first
+        ? await o.model.chat(messages, offeredSpecs, MAX_OUTPUT_TOKENS)
+        : await o.model.chat(messages, offeredSpecs, MAX_OUTPUT_TOKENS, { reasoningEffort: 'low' })
     } catch (error) {
       console.error('model call failed', error instanceof Error ? error.message : String(error))
       if (!modelRetried) {
@@ -707,6 +711,62 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
       }
 
       if (name === PRESENT_GIFTS.name) {
+        const droppedProblems: string[] = []
+        const schemaIdeas = (PRESENT_GIFTS.inputSchema.properties?.ideas?.properties ?? {}) as Record<string, JsonSchema>
+        const ideaItemSchema = (schemaIdeas.brand as JsonSchema)?.items ?? PRESENT_GIFTS.inputSchema.properties?.cards?.items!
+        const cardItemSchema = PRESENT_GIFTS.inputSchema.properties?.cards?.items!
+
+        if (typeof args.ideas === 'object' && args.ideas !== null && !Array.isArray(args.ideas)) {
+          const ideasObj = args.ideas as Record<string, unknown>
+          for (const key of Object.keys(ideasObj)) {
+            if (!(key in schemaIdeas)) {
+              delete ideasObj[key]
+              droppedProblems.push(`arguments.ideas.${key} is not expected`)
+              continue
+            }
+            if (Array.isArray(ideasObj[key])) {
+              const kept: unknown[] = []
+              const list = ideasObj[key] as unknown[]
+              for (let i = 0; i < list.length; i++) {
+                const item = list[i]
+                const itemProblems = validate(ideaItemSchema, item, `arguments.ideas.${key}[${i}]`)
+                if (itemProblems.length) {
+                  droppedProblems.push(...itemProblems)
+                } else {
+                  kept.push(item)
+                }
+              }
+              ideasObj[key] = kept
+            }
+          }
+        }
+
+        if (Array.isArray(args.cards)) {
+          const kept: unknown[] = []
+          for (let i = 0; i < args.cards.length; i++) {
+            const item = args.cards[i]
+            const itemProblems = validate(cardItemSchema, item, `arguments.cards[${i}]`)
+            if (itemProblems.length) {
+              droppedProblems.push(...itemProblems)
+            } else {
+              kept.push(item)
+            }
+          }
+          args.cards = kept
+        }
+
+        const ideasLeft = typeof args.ideas === 'object' && args.ideas !== null && !Array.isArray(args.ideas)
+          ? Object.values(args.ideas as Record<string, unknown[]>).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0)
+          : 0
+        const cardsLeft = Array.isArray(args.cards) ? args.cards.length : 0
+        if (droppedProblems.length && ideasLeft === 0 && cardsLeft === 0) {
+          answer('Not shown: ' + droppedProblems.slice(0, 4).join('; '))
+          continue
+        }
+        if (typeof args.ideas === 'object' && args.ideas !== null && !Array.isArray(args.ideas) && ideasLeft === 0 && cardsLeft > 0) {
+          delete args.ideas
+        }
+
         const problems = validate(PRESENT_GIFTS.inputSchema, args)
         if (problems.length) {
           answer('Not shown: ' + problems.slice(0, 4).join('; '))

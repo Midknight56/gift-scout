@@ -374,6 +374,34 @@ describe('a later turn: the free tool loop', () => {
     expect(state.cards.length).toBeGreaterThan(0)
   })
 
+  it('asks the model for low reasoning effort on a later turn', async () => {
+    const efforts: unknown[] = []
+    const replies = [reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap')] })])]
+    const model: Model = { name: 'effort', async chat(_m, _t, _k, options) {
+      efforts.push(options?.reasoningEffort)
+      const r = replies.shift(); if (!r) throw new Error('no more replies'); return r
+    } }
+    const st = laterState()
+    st.found['B-FENDER'] = { entity: { id: 'B-FENDER', name: 'Fender', type: 'brand', affinity: 0.93 }, seeds: ['Phoebe Bridgers'], from_call: 2 }
+    await turn(model, 'Cheaper please', st)
+    expect(efforts.length).toBeGreaterThan(0)
+    expect(efforts.every((e) => e === 'low')).toBe(true)
+  })
+
+  it('keeps the good ideas when a few ideas break the rules', async () => {
+    const st = laterState()
+    st.found['B-FENDER'] = { entity: { id: 'B-FENDER', name: 'Fender', type: 'brand', affinity: 0.93 }, seeds: ['Phoebe Bridgers'], from_call: 2 }
+    st.found['B-HMART'] = { entity: { id: 'B-HMART', name: 'H MART', type: 'brand', affinity: 0.88 }, seeds: ['Phoebe Bridgers'], from_call: 2 }
+    st.found['B-VANS'] = { entity: { id: 'B-VANS', name: 'Vans', type: 'brand', affinity: 0.88 }, seeds: ['Phoebe Bridgers'], from_call: 2 }
+    // Measured live 9 Nov 2026: a podcast priced at 0 dollars and an unknown group named "cards" made the whole list fail.
+    const messy = { ideas: { brand: [card('B-FENDER', 'A Fender strap', 20, 30), card('B-HMART', 'An H MART gift card', 0, 0)], cards: [card('B-VANS', 'Vans socks', 15, 20)] }, budget_max: 30 }
+    const model = scripted([reply([call('present_gifts', messy)]), reply([call('present_gifts', messy)])])
+    const { events, state } = await turn(model, 'Cheaper please', st)
+    expect(state.cards.map((c) => c.gift)).toContain('A Fender strap')
+    expect(state.cards.some((c) => c.gift === 'An H MART gift card')).toBe(false)
+    expect(events.some((e) => e.t === 'error')).toBe(false)
+  })
+
   it('takes a city they never named out of a call', async () => {
     const model = scripted([
       reply([call('taste_insights', { seed_ids: [PB], target_type: 'place', location: 'New York' })]),
