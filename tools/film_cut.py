@@ -17,9 +17,16 @@ OUT = OUT_DIR / "gift-scout-film.mp4"
 FPS = 30
 RATE = 48000
 FONT = "C\\:/Windows/Fonts/seguisb.ttf"
-BANNED_WORDS = ("sandbox", "test money", "test card", "fake", "pretend", "for this demo")
+BANNED_WORDS = (
+    "sandbox", "test money", "test card", "fake", "pretend", "for this demo",
+    "synthetic", "scripted", "not real money", "simulated money", "play money",
+    "demo cap", "fictional",
+)
+BANNED_RAW = (r"simulat\w*", r"samples?")
 BANNED_PATTERN = re.compile(
-    r"\b(?:" + "|".join(re.escape(w).replace(r"\ ", r"\s+") for w in BANNED_WORDS) + r")\b",
+    r"\b(?:"
+    + "|".join([re.escape(w).replace(r"\ ", r"\s+") for w in BANNED_WORDS] + list(BANNED_RAW))
+    + r")\b",
     re.IGNORECASE,
 )
 
