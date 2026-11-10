@@ -4,7 +4,7 @@
 // entity's name and the seeds on a card are copied from the tool result by code, never from the model's words.
 import { validate, type JsonSchema } from '../mcp/schema'
 import type { Tool } from '../mcp/server'
-import type { Entity, Tag } from '../qloo/client'
+import { ENTITY_TYPES, type Entity, type Tag } from '../qloo/client'
 import type { SearchResult } from '../channel3/client'
 import type { QlooContext } from '../qloo/tools'
 import type { Card, Dropped, Found, ScoutEvent } from './events'
@@ -514,6 +514,7 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
   let cutRetried = false
   let presented = false
   let modelFailed = false
+  let modelRetried = false
   /** Entity ids from the last refused present_gifts call, in sorted order. */
   let refusedGiftIds: string[] | undefined
   let refusedGiftFeedbackText = ''
@@ -529,6 +530,8 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
     // A city they never named is taken out before the call: measured 23 Oct 2026, the model sent "New York" for a
     // dad in no city, and Qloo found no place.
     if (typeof args.location === 'string' && !saidIn(args.location, state.said)) delete args.location
+    // The tool says to leave type out, and an untyped search finds an author (measured 9 Nov 2026, the model sent "author").
+    if (name === 'search_entities' && args.type !== undefined && !(ENTITY_TYPES as readonly unknown[]).includes(args.type)) delete args.type
     if (name === 'taste_insights') {
       for (const field of ['seed_ids', 'seed_tags', 'filter_tags']) {
         if (Array.isArray(args[field])) args[field] = args[field].filter((id: unknown) =>
@@ -602,6 +605,10 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
       reply = await o.model.chat(messages, offeredSpecs, MAX_OUTPUT_TOKENS)
     } catch (error) {
       console.error('model call failed', error instanceof Error ? error.message : String(error))
+      if (!modelRetried) {
+        modelRetried = true
+        continue
+      }
       modelFailed = true
       break
     }
