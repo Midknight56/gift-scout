@@ -6,11 +6,13 @@ import { execFileSync, execSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright'
+import { installMock } from './film_mock.mjs'
 import { pageCleaner } from './film_words.mjs'
 
 const args = process.argv.slice(2)
 const BASE = (args.find((arg) => arg.startsWith('http')) ?? 'https://gift-scout.midknight-labs.workers.dev').replace(/\/$/, '')
-const OUT = 'out/film'
+const isMock = args.includes('--mock')
+const OUT = isMock ? 'out/film-mock' : 'out/film'
 const FRAMES = resolve(OUT, 'tour-frames')
 const MESSAGE = 'My dad. Le Carre novels and single malt. Christmas, under 70 dollars.'
 
@@ -111,6 +113,7 @@ try {
       Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: (value) => { window.__filmShareUrl = value; return Promise.resolve() } })
     } catch {}
   })
+  if (isMock) await installMock(page)
   await page.goto(BASE + '/')
   await page.locator('[data-example]').first().waitFor()
   const appHeight = await page.locator('.app-shell').evaluate((element) => element.getBoundingClientRect().height)
@@ -223,8 +226,10 @@ try {
 
   // A store listing if the current cards have one, else an idea, labelled as such on the card.
   const current = page.locator('.card-list').last()
-  const offerCard = current.locator('.gift-card:not(.withdrawn)').filter({ has: page.locator('.card-kind.offer') }).first()
-  const chosen = (await offerCard.count()) ? offerCard : current.locator('.gift-card:not(.withdrawn)').filter({ has: page.locator('[data-buy]') }).first()
+  const buyable = current.locator('.gift-card:not(.withdrawn)').filter({ has: page.locator('[data-buy]') })
+  if (!(await buyable.count())) throw new Error('no card to buy')
+  const offerCard = buyable.filter({ has: page.locator('.card-kind.offer') }).first()
+  const chosen = (await offerCard.count()) ? offerCard : buyable.first()
   await smoothIntoView(chosen)
   await pause(1500)
   await beat(await offerCard.count() ? 'offer' : 'idea only', null, false, clean(await chosen.innerText()))
@@ -277,7 +282,7 @@ try {
   const shareUrl = await page.evaluate(() => window.__filmShareUrl)
   if (!shareUrl || !shareUrl.startsWith(BASE + '/s/')) throw new Error('The app did not expose its conversation share URL')
   await page.goto(shareUrl)
-  await page.locator('.gift-card').first().waitFor({ timeout: 30000 })
+  await page.locator('.gift-card').first().waitFor({ state: 'attached', timeout: 30000 })
   await beat('share', null, false, clean(await page.locator('#chat-log').innerText()))
   const shareScroll = page.locator('#chat-scroll')
   await animateScroll(shareScroll, 10000)

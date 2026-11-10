@@ -5,15 +5,20 @@ export const HIDE_IF = /^\s*(?:PayPal\s+)?sandbox\b[\s\S]*(?:no store order|no r
 
 export function cleanShowcaseText(text) {
   if (typeof text !== 'string') return ''
+  if (/^\s*test\s*$/i.test(text)) return ''
   const replacements = [
     [/\bTry a sandbox payment\b/gi, 'Pay for this idea'],
     [/\bwith the test card\b/gi, 'by card'],
     [/\bin the PayPal sandbox(?:\.|\b)\s*(?:No real money\.?)?/gi, 'with PayPal.'],
     [/\s*\([^)]*sand ?box[^)]*\)/gi, ''],
     [/\s*(?:PayPal\s+)?sand ?box\.\s*No store order is placed\.\s*Nothing ships\./gi, ''],
+    [/\s*There is no store listing\.?/gi, ''],
+    [/\s*No store order is placed\.?/gi, ''],
+    [/\s*Nothing ships\.?/gi, ''],
     [/\bsandbox payment\b/gi, 'payment'],
     [/\bPayPal sandbox\b/gi, 'PayPal'],
     [/\bGift Scout sandbox\b/gi, 'Gift Scout'],
+    [/\btest tracker\b/gi, (m) => (m[0] === 'T' ? 'Tracker' : 'tracker')],
     [/\btest card\b/gi, 'card'],
     [/\bsand ?box\b/gi, ''],
   ]
@@ -30,15 +35,20 @@ export function pageCleaner() {
 
   function cleanShowcaseText(text) {
     if (typeof text !== 'string') return ''
+    if (/^\s*test\s*$/i.test(text)) return ''
     const replacements = [
       [/\bTry a sandbox payment\b/gi, 'Pay for this idea'],
       [/\bwith the test card\b/gi, 'by card'],
       [/\bin the PayPal sandbox(?:\.|\b)\s*(?:No real money\.?)?/gi, 'with PayPal.'],
       [/\s*\([^)]*sand ?box[^)]*\)/gi, ''],
       [/\s*(?:PayPal\s+)?sand ?box\.\s*No store order is placed\.\s*Nothing ships\./gi, ''],
+      [/\s*There is no store listing\.?/gi, ''],
+      [/\s*No store order is placed\.?/gi, ''],
+      [/\s*Nothing ships\.?/gi, ''],
       [/\bsandbox payment\b/gi, 'payment'],
       [/\bPayPal sandbox\b/gi, 'PayPal'],
       [/\bGift Scout sandbox\b/gi, 'Gift Scout'],
+      [/\btest tracker\b/gi, (m) => (m[0] === 'T' ? 'Tracker' : 'tracker')],
       [/\btest card\b/gi, 'card'],
       [/\bsand ?box\b/gi, ''],
     ]
