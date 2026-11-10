@@ -9,15 +9,17 @@ Try it: https://gift-scout.midknight-labs.workers.dev
 
 ## Judging criteria at a glance
 
-**Technological Implementation.** PayPal Orders v2: create, capture, tracker and refund, with a verified webhook and a stable PayPal-Request-Id on every attempt, so a lost answer is read back instead of charged twice. AI: an agent on Cloudflare Workers AI (@cf/openai/gpt-oss-20b) calls three Qloo tools and writes the cards. Code checks that each card rests on a Qloo result from this conversation, fits the price limits and repeats no other card.
+**In short.** Gift Scout is for anyone buying a gift for someone they only half know. Type one line with what the person loves and a budget. An agent looks up each love in the Qloo taste graph, asks what the same fans also love, and returns up to six gift cards. Channel3 product search turns a card into a real store listing with an exact price when one exists. Pick one and pay on the same page with PayPal, with no login. A refund is one tap.
+
+**Technological Implementation.** PayPal Orders v2: create, capture, tracker and refund, with a verified webhook and a stable PayPal-Request-Id on every attempt, so a lost answer is read back instead of charged twice. AI: an agent on Cloudflare Workers AI (@cf/openai/gpt-oss-20b) calls three Qloo tools and writes the cards. Code checks that each card rests on a Qloo result from this conversation, fits the price limits and repeats no other card. Channel3 product search finds the store listing for a card, and a listing must match the card's product type. Check it: [src/paypal/client.ts](https://github.com/Midknight56/gift-scout/blob/main/src/paypal/client.ts), [src/paypal/webhook.ts](https://github.com/Midknight56/gift-scout/blob/main/src/paypal/webhook.ts), [src/qloo/tools.ts](https://github.com/Midknight56/gift-scout/blob/main/src/qloo/tools.ts), [src/channel3/client.ts](https://github.com/Midknight56/gift-scout/blob/main/src/channel3/client.ts), [src/agent/agent.ts](https://github.com/Midknight56/gift-scout/blob/main/src/agent/agent.ts).
 
 **Design.** One line in, up to six gift cards out. Each card says whether it is a store listing with an exact price or a gift idea with an estimate. "Behind the scenes" lists every lookup as it runs, and "Leave out" removes one interest and redraws the cards.
 
 **Potential Impact.** For anyone buying a gift for someone they only half know. Search gives the same mug and the same socks; Gift Scout starts from what the person already loves.
 
-**Innovation/Idea.** Every gift traces back to the exact taste graph lookup that found it. "Compare with the taste graph off" puts the same model's picks without the taste graph side by side.
+**Innovation/Idea.** Every gift traces back to the exact taste graph lookup that found it. "Compare with the taste graph off" puts the same model's picks without the taste graph side by side. A plain chat model suggests gifts from general knowledge and cannot show why. Gift Scout shows the lookup behind each card. Check it: [src/agent/compare.ts](https://github.com/Midknight56/gift-scout/blob/main/src/agent/compare.ts).
 
-**Presentation.** The video runs 2 minutes 46 seconds. At https://gift-scout.midknight-labs.workers.dev you can choose a gift, pay with the sandbox test card with no login, and refund it on the same page.
+**Presentation.** The video runs 2 minutes 46 seconds. At https://gift-scout.midknight-labs.workers.dev you can choose a gift, pay with the sandbox test card with no login, and refund it on the same page. Video guide: 0:09 one line in, and the Qloo lookups start; 0:22 each card names the result behind it; 0:58 the same request with and without the taste graph; 1:19 leave out one love and the cards redraw; 1:49 pay by card with no login; 2:02 one tap refunds it in full.
 
 ## Judge in 60 seconds
 
