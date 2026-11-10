@@ -76,7 +76,7 @@ export class RunCache {
 
 export class NeuronLedger implements Budget {
   private day: () => string
-  constructor(private db: D1Like, private opts: { app: string; dailyCap: number; accountCap: number; reserve?: number; day?: () => string }) {
+  constructor(private db: D1Like, private opts: { app: string; dailyCap: number; accountCap: number; reserve?: number; turnStart?: number; day?: () => string }) {
     this.day = opts.day ?? (() => new Date(clock.now()).toISOString().slice(0, 10))
   }
 
@@ -89,7 +89,7 @@ export class NeuronLedger implements Budget {
 
   async allow(): Promise<boolean> {
     const spent = await this.spentToday()
-    const reserve = this.opts.reserve ?? MAX_CALL_NEURONS
+    const reserve = this.opts.turnStart ?? this.opts.reserve ?? MAX_CALL_NEURONS
     return spent.app + reserve <= this.opts.dailyCap && spent.all + reserve <= this.opts.accountCap
   }
 

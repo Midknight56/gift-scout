@@ -364,6 +364,16 @@ describe('a later turn: the free tool loop', () => {
     expect(events.filter((e) => e.t === 'error').map((e) => (e as { text: string }).text)).toEqual(['The model did not answer. Try again in a minute.'])
   })
 
+  it('says a short line when a later turn ends with no new cards and nothing said', async () => {
+    const model = scripted([reply([], ''), reply([], '')])
+    const initial = { ...laterState(), cards: [{ id: 't1c1', gift: 'A Fender strap', why: 'A good fit for her.', price_low: 20, price_high: 40, entity: { id: 'B-FENDER', name: 'Fender', type: 'brand' }, seeds: ['Phoebe Bridgers'], from_call: 1 }] }
+    const { events, state } = await turn(model, 'Make it cheaper, under 30 dollars.', initial)
+    expect(events.some((e) => e.t === 'cards')).toBe(false)
+    const said = events.filter((e) => e.t === 'say' || e.t === 'error')
+    expect(said.length).toBeGreaterThan(0)
+    expect(state.cards.length).toBeGreaterThan(0)
+  })
+
   it('takes a city they never named out of a call', async () => {
     const model = scripted([
       reply([call('taste_insights', { seed_ids: [PB], target_type: 'place', location: 'New York' })]),

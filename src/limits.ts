@@ -65,6 +65,11 @@ export function dailyNeuronShare(now: number = clock.now()): number {
 // step of up to about 47,000 bytes run: (900 - 38.2) / 18,182 per million = 47,398. The largest real call in the
 // ledger to 9 Nov 2026 cost 104.1 neurons. The default reserve, for a caller that names none, is this ceiling.
 export const MAX_CALL_NEURONS = 900
+// The room a new live turn needs before it starts. It is only a gate: every model call still reserves its own
+// worst case in the ledger (one atomic insert that fails over the daily or account cap), so the caps stay hard and
+// usage stays under the free 10,000 neurons a day: $0. The largest worst case held in the ledger to 9 Nov 2026 was
+// 312 neurons; 400 gives room. With 900 here a turn was refused at 1,241 of 2,000 spent (9 Nov 2026).
+export const TURN_START_NEURONS = 400
 
 /** "Buy this one" taps per visitor a day. Each makes one PayPal sandbox order and one model call (at most 135 neurons). */
 export const DAILY_BUYS_PER_VISITOR = 6

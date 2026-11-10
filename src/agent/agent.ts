@@ -485,6 +485,15 @@ async function attachProducts(cards: Card[], state: ConversationState, products:
  *  A first turn is plan, then present: the model names what they love, code asks Qloo, the model writes the cards.
  *  A later turn is a free tool loop over the Qloo tools, ending in present_gifts. */
 export async function runTurn(o: TurnOptions): Promise<ConversationState> {
+  let emittedSayOrCards = false
+  const rawEmit = o.emit
+  o = {
+    ...o,
+    emit: (event) => {
+      if (event.t === 'say' || event.t === 'cards') emittedSayOrCards = true
+      return rawEmit(event)
+    },
+  }
   const now = o.now ?? Date.now
   const state: ConversationState = structuredClone(o.state)
   state.dropped_interests ??= []
@@ -756,6 +765,7 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
     if (refused === reply.tool_calls.length) step = steps.length - 1
   }
   if (!modelFailed && !presented && !state.cards.length && !stopped) await o.emit({ t: 'error', text: 'No gift ideas this time. Try saying a little more about them.' })
+  if (!modelFailed && !presented && !stopped && state.cards.length && !emittedSayOrCards) await o.emit({ t: 'say', text: 'No new ideas this time. The cards above still stand. Try saying it another way.' })
   await o.emit({ t: 'usage', model_calls: modelCalls, neurons: Math.round(neurons * 10) / 10 })
   if (modelFailed) await o.emit({ t: 'error', text: 'The model did not answer. Try again in a minute.' })
   return state
