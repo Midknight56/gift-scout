@@ -49,6 +49,14 @@ export const DEFAULT_ACCOUNT_NEURONS = 9500
 export const JUDGING_DAILY_NEURONS = 3500
 export const JUDGING_FROM = Date.parse('2026-11-02T05:00:00Z')
 export const JUDGING_UNTIL = Date.parse('2026-11-06T04:45:00Z')
+// From 10 Nov 2026 until 13 Nov 2026 05:00 UTC Gift Scout may use 7,000 neurons a day, on the owner's word
+// (10 Nov 2026: the other apps are idle), then the share drops back to 2,000 by itself. Gift Scout 7,000 plus the
+// other ledger apps' highest measured day 1,003 (9 Nov 2026) is 8,003. That is under the account cap of 9,500 (one
+// atomic insert, unchanged), which is under the free 10,000 a day, so usage costs $0. On 10 Nov 2026 (UTC) 590
+// neurons were spent off the ledger: 8,003 + 590 = 8,593, still under 10,000.
+export const EXTRA_DAILY_NEURONS = 7000
+export const EXTRA_SHARE_FROM = Date.parse('2026-11-10T00:00:00Z')
+export const EXTRA_SHARE_UNTIL = Date.parse('2026-11-13T05:00:00Z')
 const NEURON_WINDOWS = [
   [JUDGING_FROM, JUDGING_UNTIL],
   [DECEMBER_FROM, DECEMBER_UNTIL],
@@ -56,6 +64,7 @@ const NEURON_WINDOWS = [
 // December's share is 3,500 a day. The shared account cap of 9,500 stops every app together before the free
 // 10,000 a day, so December costs $0 too.
 export function dailyNeuronShare(now: number = clock.now()): number {
+  if (EXTRA_SHARE_FROM <= now && now < EXTRA_SHARE_UNTIL) return EXTRA_DAILY_NEURONS
   return inWindows(NEURON_WINDOWS, now) ? JUDGING_DAILY_NEURONS : DEFAULT_DAILY_NEURONS
 }
 // The most one Workers AI call may hold in the ledger. Before each call the code reserves that call's own worst case,
