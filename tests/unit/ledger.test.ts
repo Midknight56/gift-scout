@@ -35,6 +35,17 @@ describe('NeuronLedger', () => {
     expect(await boundary.value.allow()).toBe(true)
   })
 
+  it('starts a turn on its own smaller check, while a call with no amount still holds the full reserve', async () => {
+    const db = new FakeD1()
+    databases.push(db)
+    const value = new NeuronLedger(db, { app: 'gift-scout', dailyCap: 2000, accountCap: 9500, reserve: 900, turnStart: 400, day: () => '2026-10-23' })
+    db.insertCall('gift-scout', '2026-10-23', 1600)
+    expect(await value.allow()).toBe(true)
+    db.insertCall('gift-scout', '2026-10-23', 1)
+    expect(await value.allow()).toBe(false)
+    expect(await value.reserve()).toBeNull()
+  })
+
   it('reserves the next call against the account cap', async () => {
     const { db, value } = ledger({ dailyCap: 200, accountCap: 100, reserve: 50 })
     db.insertCall('other-app', '2026-10-23', 51)
