@@ -171,7 +171,7 @@ describe('Workers AI and scout stream', () => {
     // Needs runTurn's model failure handling, which is in the protected src/agent/ tree.
     for (const failAt of [1, 2]) {
       const { db, conversations } = makeDb(); const spent: number[] = []; let calls = 0
-      const model = new WorkersAiModel({ async run() { calls++; if (calls === failAt) throw new Error(SECRET); return { response: 'still thinking', usage: { prompt_tokens: 100, completion_tokens: 20, neurons: 7 } } } })
+      const model = new WorkersAiModel({ async run() { calls++; if (calls >= failAt) throw new Error(SECRET); return { response: 'still thinking', usage: { prompt_tokens: 100, completion_tokens: 20, neurons: 7 } } } })
       const deps: ScoutDeps = { conversations, runs: new RunCache(db), recorded: async () => [], tools: qlooTools(), live: { model, ctx: { qloo: new QlooClient('', failFetch(), new MemoryCache(), async () => true) }, budget: { allow: async () => true, reserve: async () => ({ settle: async (n) => { spent.push(n) } }) }, takeVisitorTurn: async () => true }, newId: () => `conv${failAt}123`, ownerToken: async () => 'hidden', isOwner: async () => false }
       const events: ScoutEvent[] = []; await scoutTurn('A fresh request about a loved one.', undefined, deps, async (e) => { events.push(e) })
       expect(events.at(-1)?.t).toBe('done'); expect(events.at(-2)?.t).toBe('error'); expect(events.filter((e) => e.t === 'error')).toHaveLength(1)

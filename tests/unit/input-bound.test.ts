@@ -56,7 +56,8 @@ describe('the input size bound and the neuron reserve', () => {
     const model = recording()
     const budget = sizedBudget()
     await runTurn({ message: 'My sister loves Phoebe Bridgers.', state: newState('c1'), model, tools: qlooTools(), ctx: qlooCtx(), budget, emit: () => {} })
-    expect(model.sent).toHaveLength(1)
+    // A thrown call is asked once more (9 Nov 2026), so a model that always throws is called twice.
+    expect(model.sent).toHaveLength(2)
     const first = model.sent[0]
     expect(budget.asked[0]).toBe(callReserve(first.messages, first.tools, first.maxTokens))
   })

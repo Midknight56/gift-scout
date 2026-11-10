@@ -327,6 +327,43 @@ describe('a later turn: the free tool loop', () => {
     expect(state.budget_max).toBe(30)
   })
 
+  it('drops a search type Qloo does not have instead of failing the call', async () => {
+    const model = scripted([
+      reply([call('search_entities', { query: 'Phoebe Bridgers', type: 'author', take: 1 })]),
+      reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap')] })]),
+    ])
+    const { events } = await turn(model, 'Drop Korean food.', laterState())
+    const result = events.find((e) => e.t === 'result')
+    expect(result).toMatchObject({ tool: 'search_entities', ok: true })
+    expect(events.find((e) => e.t === 'call')).toMatchObject({ args: { query: 'Phoebe Bridgers', take: 1 } })
+    expect((events.find((e) => e.t === 'call') as { args: Record<string, unknown> }).args.type).toBeUndefined()
+  })
+
+  it('asks the model once more when a model call throws, then goes on', async () => {
+    const replies = [
+      reply([call('taste_insights', { seed_ids: [PB], target_type: 'brand' })]),
+      reply([call('present_gifts', { cards: [card('B-FENDER', 'A Fender strap')] })]),
+    ]
+    let calls = 0
+    const model: Model = { name: 'flaky', async chat() {
+      calls++
+      if (calls === 2) throw new Error('3043: internal server error')
+      const r = replies.shift(); if (!r) throw new Error('no more replies'); return r
+    } }
+    const { events, state } = await turn(model, 'Cheaper please', laterState())
+    expect(calls).toBe(3)
+    expect(events.some((e) => e.t === 'error')).toBe(false)
+    expect(state.cards.map((c) => c.gift)).toEqual(['A Fender strap'])
+  })
+
+  it('still says the model did not answer after a second throw in a row', async () => {
+    let calls = 0
+    const model: Model = { name: 'down', async chat() { calls++; throw new Error('3043: internal server error') } }
+    const { events } = await turn(model, 'Cheaper please', laterState())
+    expect(calls).toBe(2)
+    expect(events.filter((e) => e.t === 'error').map((e) => (e as { text: string }).text)).toEqual(['The model did not answer. Try again in a minute.'])
+  })
+
   it('takes a city they never named out of a call', async () => {
     const model = scripted([
       reply([call('taste_insights', { seed_ids: [PB], target_type: 'place', location: 'New York' })]),

@@ -70,7 +70,7 @@ describe('taking back an interest', () => {
     const withdrawn = next.events.findIndex((event) => event.t === 'cards_withdrawn')
     expect(next.events[withdrawn]).toEqual({ t: 'cards_withdrawn', cards: old.state.cards.map((card) => card.id), names: ['Aspen'] })
     expect(withdrawn).toBeLessThan(next.events.findIndex((event) => event.t === 'error'))
-    expect(next.seen).toHaveLength(1)
+    expect(next.seen).toHaveLength(2) // the failed call is asked once more
     expect(next.state.cards).toEqual([])
   })
 
