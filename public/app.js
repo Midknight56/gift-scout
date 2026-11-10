@@ -1,6 +1,6 @@
 // The Gift Scout page: sends a message, reads the agent's events as they stream (NDJSON, see src/agent/events.ts), and
 // draws the chat on the left and every Qloo call on the right. A conversation keeps its panel across turns.
-import { cardHtml, callRowHtml, compareHtml, escapeHtml, orderBlockHtml, orderRowHtml, offerMessage, payCopy, quoteFor, paidRowHtml, panelSummary, refundFailedRowHtml, refundPendingRowHtml, refundRowHtml, shippedRowHtml, shippingProblem, plainLabels, walkSvg } from './render.js';
+import { cardHtml, callRowHtml, compareHtml, escapeHtml, orderBlockHtml, orderRowHtml, offerMessage, payCopy, quoteFor, paidRowHtml, panelSummary, refundFailedRowHtml, refundPendingRowHtml, refundRowHtml, shippedRowHtml, shippingProblem, plainLabels, plainName, walkSvg } from './render.js';
 
 const $ = (selector) => document.querySelector(selector);
 const chat = $('#chat-log');
@@ -452,7 +452,7 @@ function handleEvent(event, { live = true } = {}) {
     }
     case 'say':
       if (chat.lastElementChild?.classList.contains('leave-out-result') && /^(Dropped what came from|Nothing shown came from) /.test(event.text)) break;
-      addLine('say-line', event.text);
+      addLine('say-line', plainName(event.text));
       break;
     case 'call':
       calls.set(event.n, { call: event, result: null });

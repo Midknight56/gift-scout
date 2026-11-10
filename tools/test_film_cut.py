@@ -96,6 +96,18 @@ def main():
     seg_late, len_late = build_timeline(fitted_late, beats)
     placed_late = place_voice(late, beats, seg_late, {"e": 6.0}, len_late)
     equal(placed_late[0]["end"] <= len_late - 0.5, True, "auto fit holds the end until the last line is done")
+    # Live take 10 Nov 2026: "sent" at 9.54 s and "first call" at 9.75 s on a 2x piece. The hold for the second line
+    # was split in before the first line's beat, so it pushed both lines and they still overlapped.
+    fast_beats = {"s": {"at": 0.0}, "p": {"at": 9.54}, "q": {"at": 9.75}, "e": {"at": 40.0}}
+    fast_plan = {"segments": [{"from": "s", "to": "e", "speed": 2.0, "pad_after": 0.0}], "end_hold": 2.0}
+    fast = {"lines": [
+        {"id": "p1", "beat": "p", "offset": 0.2, "take": 1, "text": "One."},
+        {"id": "q1", "beat": "q", "offset": 0.3, "take": 1, "text": "Two."},
+    ]}
+    fitted_fast = auto_fit(fast_plan, fast_beats, fast, {"p1": 4.0, "q1": 3.0})
+    seg_fast, len_fast = build_timeline(fitted_fast, fast_beats)
+    placed_fast = {line["id"]: line for line in place_voice(fitted_fast.get("script", fast), fast_beats, seg_fast, {"p1": 4.0, "q1": 3.0}, len_fast)}
+    equal(placed_fast["q1"]["at"] >= placed_fast["p1"]["end"] + 0.3, True, "a hold between two close beats on a fast piece lands between them")
     close = {"captions": [
         {"beat": "start", "offset": 0.0, "length": 4.0, "text": "First caption."},
         {"beat": "middle", "offset": -4.0, "length": 3.0, "text": "Second caption."},
