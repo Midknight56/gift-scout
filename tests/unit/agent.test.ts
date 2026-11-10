@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from 'vitest'
-import { checkCards, contextFor, flattenIdeas, MAX_MODEL_CALLS, namedGift, newState, pickProduct, plain, productQuery, productSearchQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
+import { checkCards, contextFor, flattenIdeas, looksLikePlan, MAX_MODEL_CALLS, namedGift, newState, pickProduct, plain, productQuery, productSearchQuery, runTurn, saidIn, type Budget, type ConversationState } from '../../src/agent/agent'
 import type { ScoutEvent } from '../../src/agent/events'
 import { neuronsFor, readReply, stripThinking, WorkersAiModel, type ChatMessage, type Model, type ModelReply, type ToolCall } from '../../src/agent/model'
 import { QlooClient, type Cache } from '../../src/qloo/client'
@@ -718,7 +718,7 @@ describe('reading the model', () => {
 describe('plain words and named cities', () => {
   it('turns long dashes into commas and a hyphen between words into a space, and leaves numbers alone', () => {
     expect(plain('A cozy Peruvian-Latin kitchen — great for dinner')).toBe('A cozy Peruvian Latin kitchen, great for dinner')
-    expect(plain('Korean-Chinese dumplings, 2-for-1')).toBe('Korean Chinese dumplings, 2-for-1')
+    expect(plain('Korean-Chinese dumplings, 2-for-1')).toBe('Korean Chinese dumplings, 2 for 1')
   })
 
   it('knows a city they named from one they did not', () => {
@@ -1116,5 +1116,145 @@ describe('entity product queries', () => {
     expect(context).toContain('A')
     expect(context).toContain('John le Carré')
     expect(context).not.toContain('B')
+  })
+})
+
+describe('ground replacement after leave out', () => {
+  it('grounds replacement cards in taste graph code after dropping an interest leaves no eligible results', async () => {
+    const A = '00000000-0000-4000-8000-00000000000a'
+    const B = '00000000-0000-4000-8000-00000000000b'
+    const X = '00000000-0000-4000-8000-00000000000x'
+    const state: ConversationState = {
+      ...newState('drop-ground'),
+      turn: 1,
+      said: ['He loves Le Carre novels and single malt.'],
+      names: { [A]: 'John le Carré', [B]: 'Lagavulin' },
+      seed_interests: { [A]: ['Le Carre novels'], [B]: ['single malt'] },
+      dropped_interests: [],
+      cards: [
+        {
+          id: 't1c1',
+          gift: 'A John le Carré novel',
+          why: 'Fans of John le Carré and Lagavulin love it.',
+          price_low: 15,
+          price_high: 25,
+          entity: { id: 'OLD-BOOK', name: 'The Spy Who Came in from the Cold', type: 'book' },
+          seeds: ['John le Carré', 'Lagavulin'],
+          from_call: 1,
+        },
+        {
+          id: 't1c2',
+          gift: 'A Lagavulin bottle',
+          why: 'Fans of John le Carré and Lagavulin love it.',
+          price_low: 50,
+          price_high: 80,
+          entity: { id: 'OLD-BRAND', name: 'Lagavulin 16', type: 'brand' },
+          seeds: ['John le Carré', 'Lagavulin'],
+          from_call: 1,
+        },
+      ],
+      found: {
+        'OLD-BOOK': {
+          entity: { id: 'OLD-BOOK', name: 'The Spy Who Came in from the Cold', type: 'book' },
+          seeds: ['John le Carré', 'Lagavulin'],
+          from_call: 1,
+        },
+        'OLD-BRAND': {
+          entity: { id: 'OLD-BRAND', name: 'Lagavulin 16', type: 'brand' },
+          seeds: ['John le Carré', 'Lagavulin'],
+          from_call: 1,
+        },
+      },
+    }
+
+    const events: ScoutEvent[] = []
+    let callsBeforeModel: ScoutEvent[] = []
+    const seen: ChatMessage[][] = []
+    const offered: string[][] = []
+    const modelReplies: ModelReply[] = [
+      reply([call('present_gifts', {
+        cards: [{ entity_id: X, gift: 'A copy of Tinker Tailor', why: 'A classic espionage novel for him.', price_low: 15, price_high: 25 }],
+      })]),
+    ]
+    const model: Model = {
+      name: 'scripted',
+      async chat(messages, tools) {
+        if (seen.length === 0) callsBeforeModel = structuredClone(events)
+        seen.push(structuredClone(messages))
+        offered.push(tools.map((t) => t.function.name))
+        const r = modelReplies.shift()
+        if (!r) throw new Error('no more replies')
+        return r
+      },
+    }
+
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/v2/insights') {
+        const type = (url.searchParams.get('filter.type') ?? '').replace('urn:entity:', '')
+        if (type === 'book') {
+          return new Response(JSON.stringify({
+            results: {
+              entities: [{
+                entity_id: X,
+                name: 'Tinker Tailor Soldier Spy',
+                subtype: 'urn:entity:book',
+                query: {
+                  affinity: 0.95,
+                  explainability: { 'signal.interests.entities': [{ entity_id: A, score: 1.0 }] },
+                },
+              }],
+            },
+          }), { status: 200 })
+        }
+        return new Response(JSON.stringify({ results: { entities: [] } }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ results: [] }), { status: 200 })
+    }) as typeof fetch
+
+    const cache: Cache = { get: async () => null, put: async () => {} }
+    const ctx = { qloo: new QlooClient('k', fetcher, cache, async () => true) }
+
+    await runTurn({
+      message: 'Drop single malt.',
+      state,
+      model,
+      tools: qlooTools(),
+      ctx,
+      budget: budget(),
+      emit: (e) => { events.push(e) },
+    })
+
+    const insightCalls = callsBeforeModel.filter((e): e is Extract<ScoutEvent, { t: 'call' }> => e.t === 'call' && e.tool === 'taste_insights')
+    expect(insightCalls.length).toBeGreaterThanOrEqual(1)
+    expect(insightCalls[0].args.seed_ids).toEqual([A])
+
+    expect(offered[0]).toEqual(['present_gifts'])
+
+    const cardsEvents = events.filter((e): e is Extract<ScoutEvent, { t: 'cards' }> => e.t === 'cards' && e.cards.length > 0)
+    expect(cardsEvents).toHaveLength(1)
+    expect(cardsEvents[0].cards).toHaveLength(1)
+    expect(cardsEvents[0].cards[0].entity.id).toBe(X)
+  })
+
+  it('emits no say event holding present_gifts when a later turn reply content is **present_gifts**', async () => {
+    const st = laterState()
+    st.found['B-HMART'] = { entity: { id: 'B-HMART', name: 'H MART', type: 'brand', affinity: 0.88 }, seeds: ['Phoebe Bridgers', 'Korean'], from_call: 3 }
+    const model = scripted([
+      reply([call('present_gifts', { cards: [card('B-HMART', 'An H MART gift card', 20, 30)] })], '**present_gifts**'),
+    ])
+    const { events } = await turn(model, 'Show me ideas', st)
+    const says = events.filter((e): e is Extract<ScoutEvent, { t: 'say' }> => e.t === 'say')
+    expect(says.some((e) => e.text.includes('present_gifts'))).toBe(false)
+  })
+
+  it('treats bare tool names and stripped tool names as plan, never a say', () => {
+    expect(looksLikePlan('**present_gifts**')).toBe(true)
+    expect(looksLikePlan('__taste_insights__')).toBe(true)
+    expect(looksLikePlan('`search_entities`')).toBe(true)
+    expect(looksLikePlan('* search_tags *')).toBe(true)
+    expect(looksLikePlan('search_products')).toBe(true)
+    expect(looksLikePlan('calling present_gifts now')).toBe(true)
+    expect(looksLikePlan('I like this gift')).toBe(false)
   })
 })

@@ -490,8 +490,17 @@ async function attachProducts(cards: Card[], state: ConversationState, products:
   }))
 }
 
+const BARE_TOOLS = ['present_gifts', 'taste_insights', 'search_entities', 'search_tags', 'search_products']
+
 export function looksLikePlan(text: string): boolean {
   if (text.includes('```')) return true
+  const stripped = text.replace(/[*_`\s]/g, '').toLowerCase()
+  const bare = text.replace(/[*`\s]/g, '').toLowerCase()
+  if (BARE_TOOLS.some((t) =>
+    bare === t || bare.includes(t) ||
+    stripped === t || stripped.includes(t) ||
+    stripped === t.replace(/_/g, '') || stripped.includes(t.replace(/_/g, ''))
+  )) return true
   return text.split('\n').some((line) => {
     const trimmed = line.trimStart()
     return trimmed.startsWith('{') || trimmed.startsWith('[')
@@ -517,9 +526,16 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
   const scoredThisTurn = new Set<string>()
   state.turn += 1
   const first = state.said.length === 0
+  let withdrew = false
+  let withdrawnCards: Card[] = []
   if (!first) {
     const interests = [...Object.values(state.found).flatMap((f) => f.seeds), ...(state.planned_interests ?? []), ...Object.values(state.seed_interests ?? {}).flat()]
+    const cardsBefore = state.cards
     await dropInterests(state, takenBack(o.message, interests), o.emit)
+    withdrew = state.cards.length < cardsBefore.length
+    if (withdrew) {
+      withdrawnCards = cardsBefore.filter((card) => !state.cards.some((c) => c.id === card.id))
+    }
   }
   const pronoun = pronounsFromMessage(state.said[0] ?? o.message)
   const messages: ChatMessage[] = [
@@ -612,6 +628,19 @@ export async function runTurn(o: TurnOptions): Promise<ConversationState> {
   }
 
   const hint = (offered: string[]) => STEP_HINTS[offered.includes(PRESENT_GIFTS.name) ? PRESENT_GIFTS.name : offered[0]] ?? STEP_HINTS.present_gifts
+
+  if (withdrew && eligibleFound(state).length === 0) {
+    const seedIds = Object.keys(state.seed_interests ?? {}).filter((id) => !seedDropped(state, state.names[id] ?? id))
+    const kindsRaw = [...new Set(withdrawnCards.map((card) => card.entity.type))].filter((type) => type !== 'tag').slice(0, 4)
+    const kinds = kindsRaw.length ? kindsRaw : ['book', 'brand']
+    if (seedIds.length) {
+      for (const kind of kinds) {
+        await runTool('taste_insights', { seed_ids: seedIds, target_type: kind, take: 6 })
+      }
+      messages[1] = { role: 'user', content: contextFor({ ...state, said: state.said.slice(0, -1) }, o.message) }
+      step = steps.length - 1
+    }
+  }
 
   while (modelCalls < MAX_MODEL_CALLS && !presented && !stopped) {
     const offered = steps[Math.min(step, steps.length - 1)]
