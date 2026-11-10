@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { cleanShowcaseText, HIDE_IF } from './film_words.mjs'
 
-const BANNED = /sand ?box|test money|test card|fake|pretend|for this demo|simulated money|not real money|no real money|play money|demo cap|fictional/i
+const BANNED = /sand ?box|test money|test card|test tracker|^test$|nothing ships|no store order|fake|pretend|for this demo|simulat|samples?|synthetic|scripted|not real money|no real money|play money|demo cap|fictional/i
 
 const cases = [
   ['Try a sandbox payment', 'Pay for this idea'],
@@ -18,6 +18,12 @@ const cases = [
   ['PayPal sandbox order 1RP84723 for $15.00, paid', 'PayPal order 1RP84723 for $15.00, paid'],
   ['Gift Scout sandbox', 'Gift Scout'],
   ['sandbox', ''],
+  ['Paid, test tracker added', 'Paid, tracker added'],
+  ['Test tracker', 'Tracker'],
+  ['test', ''],
+  ['Test tracker for San Jose, CA. Nothing ships.', 'Tracker for San Jose, CA.'],
+  ['A sandbox payment of $15.00 for this idea. There is no store listing. No store order is placed. Nothing ships.', 'A payment of $15.00 for this idea.'],
+  ['A payment of $15.00 for this idea. There is no store listing. No store order is placed. Nothing ships.', 'A payment of $15.00 for this idea.'],
 ]
 for (const [input, expected] of cases) assert.equal(cleanShowcaseText(input), expected, input)
 console.log(`PASS ${cases.length} rewrites`)
@@ -32,4 +38,5 @@ console.log('PASS hidden notes')
 
 for (const [input] of cases) assert.ok(!BANNED.test(cleanShowcaseText(input)), `clean: ${input}`)
 assert.equal(cleanShowcaseText('My dad. Le Carre novels and single malt.'), 'My dad. Le Carre novels and single malt.', 'other text untouched')
+assert.equal(cleanShowcaseText('A taste test of single malts'), 'A taste test of single malts', 'the word test inside other text stays')
 console.log('ALL CASES OK')

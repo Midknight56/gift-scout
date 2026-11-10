@@ -1,5 +1,5 @@
 """Small checks for the film cutter's timeline and plan rules."""
-from film_cut import build_timeline, check_length, has_forbidden_dash, has_banned_words, place_voice, source_to_film, validate_captions
+from film_cut import auto_fit, build_timeline, make_captions, check_length, has_forbidden_dash, has_banned_words, place_voice, source_to_film, validate_captions
 
 
 def equal(actual, expected, label):
@@ -67,6 +67,44 @@ def main():
     raises(lambda: place_voice(script, beats, segments, {"a": 6.5, "b": 3.0}, length), "voice line runs into the next")
     raises(lambda: place_voice(script, beats, segments, {"a": 2.0, "b": 14.0}, length), "voice line runs past the film")
     raises(lambda: place_voice(script, beats, segments, {"a": 2.0}, length), "voice take missing")
+    fitted = auto_fit(plan, beats, script, {"a": 6.5, "b": 3.0})
+    fitted_segments, fitted_length = build_timeline(fitted, beats)
+    fitted_lines = place_voice(script, beats, fitted_segments, {"a": 6.5, "b": 3.0}, fitted_length)
+    by_id = {line["id"]: line for line in fitted_lines}
+    equal(by_id["b"]["at"] >= by_id["a"]["end"] + 0.3, True, "auto fit holds the frame so b starts after a")
+    equal(round(by_id["a"]["at"], 3), 0.5, "auto fit leaves the first line where it was")
+    equal(fitted_length > length, True, "auto fit makes the film longer, not faster")
+    equal(all((seg["to"] - seg["from"]) / seg["speed"] >= 0.1 for seg in fitted_segments), True, "auto fit leaves no piece too short to hold a frame")
+    boundary = auto_fit({"segments": [
+        {"from": "start", "to": "middle", "speed": 1.0, "pad_after": 0.0},
+        {"from": "middle", "to": "end", "speed": 1.0, "pad_after": 0.0},
+    ], "end_hold": 2.0}, beats, script, {"a": 12.0, "b": 3.0})
+    boundary_segments, boundary_length = build_timeline(boundary, beats)
+    boundary_lines = {line["id"]: line for line in place_voice(script, beats, boundary_segments, {"a": 12.0, "b": 3.0}, boundary_length)}
+    equal(boundary_lines["b"]["at"] >= boundary_lines["a"]["end"] + 0.3, True, "a line on a segment boundary lands after its hold")
+    equal(all((seg["to"] - seg["from"]) / seg["speed"] >= 0.1 for seg in boundary_segments), True, "no tiny piece at a boundary")
+    same = {"lines": [
+        {"id": "c", "beat": "start", "offset": 0.5, "take": 1, "text": "One."},
+        {"id": "d", "beat": "start", "offset": 1.0, "take": 1, "text": "Two."},
+    ]}
+    fitted_same = auto_fit(plan, beats, same, {"c": 2.0, "d": 1.0})
+    seg_same, len_same = build_timeline(fitted_same, beats)
+    placed_same = {line["id"]: line for line in place_voice(fitted_same.get("script", same), beats, seg_same, {"c": 2.0, "d": 1.0}, len_same)}
+    equal(placed_same["d"]["at"] >= placed_same["c"]["end"] + 0.3, True, "auto fit spaces two lines on one beat")
+    late = {"lines": [{"id": "e", "beat": "end", "offset": 0.0, "take": 1, "text": "Bye."}]}
+    fitted_late = auto_fit(plan, beats, late, {"e": 6.0})
+    seg_late, len_late = build_timeline(fitted_late, beats)
+    placed_late = place_voice(late, beats, seg_late, {"e": 6.0}, len_late)
+    equal(placed_late[0]["end"] <= len_late - 0.5, True, "auto fit holds the end until the last line is done")
+    close = {"captions": [
+        {"beat": "start", "offset": 0.0, "length": 4.0, "text": "First caption."},
+        {"beat": "middle", "offset": -4.0, "length": 3.0, "text": "Second caption."},
+    ]}
+    cues = make_captions(close, beats, segments, length)
+    equal(round(cues[1]["start"], 3), round(cues[0]["end"] + 0.15, 3), "a caption that would overlap starts after the one before")
+    equal(round(cues[1]["end"] - cues[1]["start"], 3), 3.0, "a pushed caption keeps its length")
+    raises(lambda: make_captions({"captions": [{"beat": "end", "offset": 0.0, "length": 30.0, "text": "Too long."}]}, beats, segments, length), "a caption past the film still fails")
+    print("PASS voice auto fit")
     raises(lambda: place_voice({"lines": [{"id": "c", "beat": "start", "offset": 0, "take": 1, "text": "A sandbox payment."}]}, beats, segments, {"c": 1.0}, length), "voice line with sandbox")
     print("PASS voice placement")
 

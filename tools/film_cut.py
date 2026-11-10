@@ -1,4 +1,5 @@
 """Cut the Gift Scout tour into a captioned film."""
+import copy
 import json
 import math
 import re
@@ -10,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "out" / "film"
+VOICE_DIR = ROOT / "out" / "film" / "voice"
 SRC = OUT_DIR / "tour.mp4"
 BEATS_FILE = OUT_DIR / "tour-beats.json"
 PLAN_FILE = ROOT / "docs" / "film-plan.json"
@@ -128,6 +130,118 @@ def place_voice(script, beats, segments, durations, film_length):
     return placed
 
 
+def auto_fit(plan, beats, script, durations, gap=0.3):
+    plan_copy = copy.deepcopy(plan)
+    script_copy = copy.deepcopy(script)
+    lines = script_copy.get("lines", []) if isinstance(script_copy, dict) else script_copy
+    if not lines:
+        return plan_copy
+
+    def calc_placed(item_lines, cur_segments):
+        placed_list = []
+        for line in item_lines:
+            ident = line["id"]
+            beat = line.get("beat")
+            if beat not in beats:
+                raise ValueError(f"Unknown beat: {beat}")
+            start = source_to_film(float(beats[beat]["at"]), cur_segments)
+            if start is None:
+                raise ValueError(f"Beat outside segments: {beat}")
+            if ident not in durations or durations[ident] is None:
+                raise ValueError(f"Missing duration for line: {ident}")
+            duration = float(durations[ident])
+            at = round(start + float(line.get("offset", 0.0)), 3)
+            end = round(at + duration, 3)
+            placed_list.append({
+                "line": line,
+                "id": ident,
+                "beat": beat,
+                "anchor": float(beats[beat]["at"]),
+                "at": at,
+                "end": end,
+                "duration": duration,
+            })
+        return placed_list
+
+    segments, film_length = build_timeline(plan_copy, beats)
+    initial_placed = calc_placed(lines, segments)
+    initial_placed.sort(key=lambda x: (x["at"], lines.index(x["line"])))
+    ordered_lines = [item["line"] for item in initial_placed]
+
+    script_modified = False
+    holds = []
+
+    for i in range(1, len(ordered_lines)):
+        segments, film_length = build_timeline(plan_copy, beats)
+        placed = calc_placed(ordered_lines, segments)
+        prev = placed[i - 1]
+        curr = placed[i]
+        diff = round(prev["end"] + gap - curr["at"], 3)
+        if diff > 0:
+            need = diff
+            prev_anchor = prev["anchor"]
+            curr_anchor = curr["anchor"]
+            if curr_anchor == prev_anchor:
+                curr_line = curr["line"]
+                curr_line["offset"] = round(float(curr_line.get("offset", 0.0)) + need, 3)
+                script_modified = True
+            else:
+                LEAD = 0.2
+                search_point = curr_anchor - 0.001
+                target_idx = None
+                for idx, seg in enumerate(plan_copy["segments"]):
+                    s_from = resolve_time(seg["from"], beats)
+                    s_to = resolve_time(seg["to"], beats)
+                    if s_from <= search_point <= s_to:
+                        target_idx = idx
+                        break
+                if target_idx is None:
+                    for idx, seg in enumerate(plan_copy["segments"]):
+                        s_from = resolve_time(seg["from"], beats)
+                        s_to = resolve_time(seg["to"], beats)
+                        if s_from <= curr_anchor <= s_to:
+                            target_idx = idx
+                            break
+                if target_idx is None:
+                    raise ValueError(f"No segment contains anchor {curr_anchor}")
+                seg = plan_copy["segments"][target_idx]
+                speed = float(seg.get("speed", 1.0))
+                s_from = resolve_time(seg["from"], beats)
+                split_point = round(curr_anchor - LEAD * speed, 4)
+                if split_point > s_from + 0.1 * speed:
+                    first = {
+                        "from": seg["from"],
+                        "to": split_point,
+                        "speed": speed,
+                        "pad_after": float(need),
+                    }
+                    second = {
+                        "from": split_point,
+                        "to": seg["to"],
+                        "speed": speed,
+                        "pad_after": float(seg.get("pad_after", 0.0)),
+                    }
+                    plan_copy["segments"][target_idx:target_idx + 1] = [first, second]
+                else:
+                    if target_idx == 0:
+                        raise ValueError("Segment too short to split and no previous segment")
+                    prev_seg = plan_copy["segments"][target_idx - 1]
+                    prev_seg["pad_after"] = float(prev_seg.get("pad_after", 0.0)) + need
+                holds.append({"seconds": need, "line": curr["id"]})
+
+    segments, film_length = build_timeline(plan_copy, beats)
+    placed = calc_placed(ordered_lines, segments)
+    last_end = placed[-1]["end"]
+    if last_end > film_length - 0.5:
+        diff = round(last_end - (film_length - 0.5), 3)
+        plan_copy["end_hold"] = float(plan_copy.get("end_hold", 0.0)) + diff
+
+    if script_modified:
+        plan_copy["script"] = script_copy
+    plan_copy["holds"] = holds
+    return plan_copy
+
+
 def check_length(length, target):
     if not float(target[0]) <= length <= float(target[1]):
         raise ValueError(f"Film length {length:.2f} s is outside target {target}")
@@ -145,6 +259,13 @@ def make_captions(plan, beats, segments, film_length):
         start += float(item.get("offset", 0.0))
         cues.append({"text": str(item["text"]), "start": start,
                      "end": start + float(item["length"])})
+    cues.sort(key=lambda cue: cue["start"])
+    for i in range(1, len(cues)):
+        prev_end = cues[i - 1]["end"]
+        if cues[i]["start"] < prev_end + 0.15:
+            length = cues[i]["end"] - cues[i]["start"]
+            cues[i]["start"] = prev_end + 0.15
+            cues[i]["end"] = cues[i]["start"] + length
     return validate_captions(cues, film_length)
 
 
@@ -221,9 +342,21 @@ def make_music(path, length, click_times):
         wav.writeframes((stereo * 32767).astype("<i2").tobytes())
 
 
+def resolve_dir():
+    args = sys.argv[1:]
+    if "--dir" in args:
+        idx = args.index("--dir")
+        if idx + 1 < len(args):
+            folder = Path(args[idx + 1])
+            return folder if folder.is_absolute() else ROOT / folder
+    return ROOT / "out" / "film"
+
+
 def run():
-    source = SRC if SRC.exists() else OUT_DIR / "take.mp4"
-    beats_path = BEATS_FILE if BEATS_FILE.exists() else OUT_DIR / "beats.json"
+    out_dir = resolve_dir()
+    source = out_dir / "tour.mp4" if (out_dir / "tour.mp4").exists() else out_dir / "take.mp4"
+    beats_path = out_dir / "tour-beats.json" if (out_dir / "tour-beats.json").exists() else out_dir / "beats.json"
+    out_film = out_dir / "gift-scout-film.mp4"
     for path in (source, beats_path, PLAN_FILE):
         if not path.is_file():
             raise SystemExit(f"Required input is missing: {path}")
@@ -241,12 +374,37 @@ def run():
         for endpoint in (segment["from"], segment["to"]):
             if isinstance(endpoint, str) and endpoint not in beats:
                 raise SystemExit(f"Plan names unknown beat: {endpoint}")
+    voice_script_file = ROOT / "docs" / "voice-script.json"
+    durations = {}
+    script = None
+    if voice_script_file.is_file():
+        script = json.loads(voice_script_file.read_text(encoding="utf-8-sig"))
+        for line in script.get("lines", []):
+            ident, take = line["id"], line["take"]
+            take_path = VOICE_DIR / f"{ident}-take{take}.mp3"
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(take_path)],
+                capture_output=True, text=True,
+            )
+            if probe.returncode == 0 and probe.stdout.strip():
+                try:
+                    durations[ident] = float(probe.stdout.strip())
+                except ValueError:
+                    pass
+        plan = auto_fit(plan, beats, script, durations)
+        for hold in plan.get("holds", []):
+            print(f"hold {hold['seconds']:.2f} s before {hold['line']}")
+        (out_dir / "film-plan-fitted.json").write_text(
+            json.dumps(plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        if "script" in plan:
+            script = plan["script"]
     segments, length = build_timeline(plan, beats)
     target = plan["target"]
     check_length(length, target)
     captions = make_captions(plan, beats, segments, length)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    caption_dir = OUT_DIR / "captions"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    caption_dir = out_dir / "captions"
     caption_dir.mkdir(exist_ok=True)
     for old in caption_dir.glob("*.txt"):
         old.unlink()
@@ -272,9 +430,9 @@ def run():
         chain = f"[cap{i}]"
     fade_start = max(0.0, length - 1.0)
     graph.append(chain + f"fade=t=in:st=0:d=0.6,fade=t=out:st={fade_start:.3f}:d=1,format=yuv420p[vout]")
-    graph_file = OUT_DIR / "film-graph.txt"
+    graph_file = out_dir / "film-graph.txt"
     graph_file.write_text(";\n".join(graph), encoding="utf-8")
-    music = OUT_DIR / "music.wav"
+    music = out_dir / "music.wav"
     click_times = []
     for row in beat_rows:
         if row.get("click") is True:
@@ -283,32 +441,17 @@ def run():
                 click_times.append(mapped)
     make_music(music, length, click_times)
     audio = music
-    voice_script_file = ROOT / "docs" / "voice-script.json"
-    if voice_script_file.is_file():
-        script = json.loads(voice_script_file.read_text(encoding="utf-8-sig"))
-        durations = {}
-        for line in script.get("lines", []):
-            ident, take = line["id"], line["take"]
-            take_path = OUT_DIR / "voice" / f"{ident}-take{take}.mp3"
-            probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(take_path)],
-                capture_output=True, text=True,
-            )
-            if probe.returncode == 0 and probe.stdout.strip():
-                try:
-                    durations[ident] = float(probe.stdout.strip())
-                except ValueError:
-                    pass
+    if script is not None:
         placed = place_voice(script, beats, segments, durations, length)
-        (OUT_DIR / "voice-placed.json").write_text(
+        (out_dir / "voice-placed.json").write_text(
             json.dumps(placed, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        mix = OUT_DIR / "mix.wav"
+        mix = out_dir / "mix.wav"
         if placed:
             inputs = ["-i", str(music)]
             delays = []
             for i, line in enumerate(placed):
-                take_file = OUT_DIR / "voice" / f"{line['id']}-take{line['take']}.mp3"
+                take_file = VOICE_DIR / f"{line['id']}-take{line['take']}.mp3"
                 inputs.extend(["-i", str(take_file)])
                 delay_ms = int(round(line["at"] * 1000))
                 delays.append(f"[{i + 1}:a]aresample={RATE},aformat=channel_layouts=stereo,adelay={delay_ms}:all=1[v{i}]")
@@ -322,7 +465,7 @@ def run():
                 "-filter_complex", ";".join(graph_parts), "-map", "[mix]",
                 "-c:a", "pcm_s16le", "-ar", str(RATE), "-t", f"{length:.3f}", str(mix)
             ]
-            subprocess.run(mix_cmd, cwd=OUT_DIR, check=True)
+            subprocess.run(mix_cmd, cwd=out_dir, check=True)
             audio = mix
         else:
             shutil.copyfile(music, mix)
@@ -332,7 +475,7 @@ def run():
                 "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
                 "-c:a", "aac", "-b:a", "192k", "-ar", str(RATE), "-t", f"{length:.3f}", "-movflags", "+faststart"]
     # The audio track is mix.wav when voice is present or music.wav alone, measured directly in the first pass.
-    analysis = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(audio), "-t", f"{length:.3f}", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"], cwd=OUT_DIR, capture_output=True, text=True)
+    analysis = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(audio), "-t", f"{length:.3f}", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"], cwd=out_dir, capture_output=True, text=True)
     if analysis.returncode:
         raise SystemExit(analysis.stderr.strip())
     match = re.search(r"\{\s*\"input_i\".*?\}", analysis.stderr, re.S)
@@ -340,21 +483,25 @@ def run():
         raise SystemExit("Could not read first pass loudness measurements: " + analysis.stderr[-1500:])
     stats = json.loads(match.group())
     measured = f"measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}:offset={stats['target_offset']}:linear=true"
-    subprocess.run(base_cmd + ["-af", f"loudnorm=I=-16:TP=-1.5:LRA=11:{measured}:print_format=summary", str(OUT)], cwd=OUT_DIR, check=True)
-    duration_probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(OUT)], capture_output=True, text=True, check=True)
+    subprocess.run(base_cmd + ["-af", f"loudnorm=I=-16:TP=-1.5:LRA=11:{measured}:print_format=summary", str(out_film)], cwd=out_dir, check=True)
+    duration_probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out_film)], capture_output=True, text=True, check=True)
     encoded_length = float(duration_probe.stdout.strip())
     check_length(encoded_length, target)
-    probe = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(OUT), "-filter_complex", "ebur128=peak=true:framelog=quiet", "-f", "null", "-"], capture_output=True, text=True, check=True)
+    probe = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(out_film), "-filter_complex", "ebur128=peak=true:framelog=quiet", "-f", "null", "-"], capture_output=True, text=True, check=True)
     loudness = re.search(r"Integrated loudness:\s*I:\s*([^\n]+).*?True peak:\s*Peak:\s*([^\n]+)", probe.stderr, re.S)
     if loudness:
         print(f"Integrated loudness: {loudness.group(1).strip()} LUFS; true peak: {loudness.group(2).strip()} dBFS")
     cut_data = {"length": encoded_length, "captions": [{"number": i + 1, "text": c["text"], "start": round(c["start"], 3), "end": round(c["end"], 3)} for i, c in enumerate(captions)]}
-    (OUT_DIR / "film-cut.json").write_text(json.dumps(cut_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    contact_sheet(captions)
-    print(f"film: {OUT} {encoded_length:.2f} s {len(captions)} captions")
+    (out_dir / "film-cut.json").write_text(json.dumps(cut_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    contact_sheet(captions, out_dir, out_film)
+    print(f"film: {out_film} {encoded_length:.2f} s {len(captions)} captions")
 
 
-def contact_sheet(captions):
+def contact_sheet(captions, out_dir=None, out_film=None):
+    if out_dir is None:
+        out_dir = resolve_dir()
+    if out_film is None:
+        out_film = out_dir / "gift-scout-film.mp4"
     if not captions:
         raise SystemExit("The plan has no captions for a contact sheet")
     from PIL import Image, ImageDraw, ImageFont
@@ -363,18 +510,18 @@ def contact_sheet(captions):
     rows = math.ceil(len(captions) / cols)
     sheet = Image.new("RGB", (cols * tile_w, rows * (tile_h + label_h)), "white")
     font = ImageFont.truetype("C:/Windows/Fonts/seguisb.ttf", 18)
-    frames_dir = OUT_DIR / "sheet-frames"
+    frames_dir = out_dir / "sheet-frames"
     frames_dir.mkdir(exist_ok=True)
     for i, cue in enumerate(captions):
         at = (cue["start"] + cue["end"]) / 2
         frame = frames_dir / f"{i + 1:02d}.png"
-        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{at:.3f}", "-i", str(OUT),
-                        "-frames:v", "1", "-vf", f"scale={tile_w}:{tile_h}", str(frame)], cwd=OUT_DIR, check=True)
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{at:.3f}", "-i", str(out_film),
+                        "-frames:v", "1", "-vf", f"scale={tile_w}:{tile_h}", str(frame)], cwd=out_dir, check=True)
         x, y = (i % cols) * tile_w, (i // cols) * (tile_h + label_h)
         with Image.open(frame) as picture:
             sheet.paste(picture.convert("RGB"), (x, y))
         ImageDraw.Draw(sheet).text((x + 10, y + tile_h + 6), f"{i + 1}  {int(at) // 60}:{int(at) % 60:02d}", fill="black", font=font)
-    sheet.save(OUT_DIR / "contact-sheet.jpg", quality=90)
+    sheet.save(out_dir / "contact-sheet.jpg", quality=90)
     shutil.rmtree(frames_dir)
 
 
