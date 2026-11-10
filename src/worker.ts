@@ -20,6 +20,7 @@ import { channel3Enabled } from './channel3/flag'
 import { qlooTools, type QlooContext } from './qloo/tools'
 import { Conversations, D1Cache, NeuronLedger, QLOO_REFUSED_KEY, RunCache } from './store/d1'
 import { REPLAY_PACE_MS, DAILY_BUYS_PER_VISITOR, DAILY_COMPARES_PER_VISITOR, DAILY_QLOO_CALLS, DAILY_QLOO_CALLS_PER_VISITOR, DAILY_CHANNEL3_CALLS, DAILY_CHANNEL3_CALLS_PER_VISITOR, DAILY_TURNS_PER_VISITOR, DEFAULT_ACCOUNT_NEURONS, dailyNeuronShare, MAX_CALL_NEURONS, TURN_START_NEURONS, QLOO_MONTH_FLOOR, clock, publicLimit, visitorLimit, JUDGE_RESERVE_NEURONS, JUDGE_RESERVE_QLOO, JUDGE_RESERVE_CHANNEL3, JUDGE_TURNS, JUDGE_BUYS, JUDGE_COMPARES } from './limits'
+import { countVisit, shouldCount } from './visit-count'
 
 export interface Env {
   /** Unset means no live Qloo: only cached and recorded answers. */
@@ -201,6 +202,7 @@ const json = (body: unknown, status = 200) => Response.json(body, { status, head
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    if (shouldCount(request) && typeof ctx?.waitUntil === 'function') ctx.waitUntil(countVisit(request, env, 'gift-scout'))
     const url = new URL(request.url)
     const path = url.pathname
 
