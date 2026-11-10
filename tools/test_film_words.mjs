@@ -24,6 +24,10 @@ const cases = [
   ['Test tracker for San Jose, CA. Nothing ships.', 'Tracker for San Jose, CA.'],
   ['A sandbox payment of $15.00 for this idea. There is no store listing. No store order is placed. Nothing ships.', 'A payment of $15.00 for this idea.'],
   ['A payment of $15.00 for this idea. There is no store listing. No store order is placed. Nothing ships.', 'A payment of $15.00 for this idea.'],
+  ['A sample bottle', 'A mini bottle'],
+  ['Sample pack', 'Mini pack'],
+  ['Three samples of single malt', 'Three minis of single malt'],
+  ['Samples of perfume', 'Minis of perfume'],
 ]
 for (const [input, expected] of cases) assert.equal(cleanShowcaseText(input), expected, input)
 console.log(`PASS ${cases.length} rewrites`)
