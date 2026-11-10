@@ -7,6 +7,18 @@ sandbox.
 
 Try it: https://gift-scout.midknight-labs.workers.dev
 
+## Judging criteria at a glance
+
+**Technological Implementation.** PayPal Orders v2: create, capture, tracker and refund, with a verified webhook and a stable PayPal-Request-Id on every attempt, so a lost answer is read back instead of charged twice. AI: an agent on Cloudflare Workers AI (@cf/openai/gpt-oss-20b) calls three Qloo tools and writes the cards. Code checks that each card rests on a Qloo result from this conversation, fits the price limits and repeats no other card.
+
+**Design.** One line in, up to six gift cards out. Each card says whether it is a store listing with an exact price or a gift idea with an estimate. "Behind the scenes" lists every lookup as it runs, and "Leave out" removes one interest and redraws the cards.
+
+**Potential Impact.** For anyone buying a gift for someone they only half know. Search gives the same mug and the same socks; Gift Scout starts from what the person already loves.
+
+**Innovation/Idea.** Every gift traces back to the exact taste graph lookup that found it. "Compare with the taste graph off" puts the same model's picks without the taste graph side by side.
+
+**Presentation.** The video runs 2 minutes 46 seconds. At https://gift-scout.midknight-labs.workers.dev you can choose a gift, pay with the sandbox test card with no login, and refund it on the same page.
+
 ## Judge in 60 seconds
 
 1. Open https://gift-scout.midknight-labs.workers.dev and tap the example "My dad. Le Carre novels and single malt.
