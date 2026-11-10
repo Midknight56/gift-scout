@@ -4,7 +4,10 @@
  *  "Korean Chinese"). Names that come from Qloo are left as Qloo has them. */
 export function plain(text: string): string {
   return text.replace(/<[^>]*>/g, '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
-    .replace(/\s*\u2014\s*/g, ', ').replace(/\s*\u2013\s*/g, ' ').replace(/(\p{L})-(?=\p{L})/gu, '$1 ').replace(/\s{2,}/g, ' ').trim()
+    .replace(/\s+[-\u2010-\u2015]\s+/g, ', ')
+    .replace(/([\p{L}\p{N}])[-\u2010-\u2015](?=\p{L})/gu, '$1 ')
+    .replace(/(\p{L})[-\u2010-\u2015](?=\p{N})/gu, '$1 ')
+    .replace(/\s{2,}/g, ' ').trim()
 }
 
 function fold(s: string): string {

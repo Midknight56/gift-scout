@@ -150,13 +150,18 @@ describe('taking back an interest', () => {
     expect(next.events.filter((e) => e.t === 'cards').flatMap((e) => e.cards)).toEqual([])
   })
 
-  it('makes mixed evidence stale, keeps its remaining seeds, and excludes it from context and cards', async () => {
+  it('asks the taste graph again for the remaining seeds and builds the next card on Birch alone', async () => {
     const old = await first(true)
     const next = await run('forget Aspen', old.state, [[present()]])
-    expect(next.state.found[E]).toMatchObject({ seeds: ['Birch'], stale: true })
-    expect(contextFor(next.state, 'More')).not.toContain('Cedar (affinity')
-    expect(next.state.cards).toEqual([])
-    expect(next.events.find((e) => e.t === 'cards')).toMatchObject({ dropped: [{ reason: 'rests on something they took back' }] })
+    // After a withdrawal with no ground left, the code asks the taste graph again for the seeds still in play,
+    // so the mixed result is replaced by a fresh one that rests on Birch alone.
+    const asked = next.events.filter((e) => e.t === 'call' && e.tool === 'taste_insights')
+    expect(asked.length).toBeGreaterThan(0)
+    expect(next.state.found[E]).toMatchObject({ seeds: ['Birch'] })
+    expect(next.state.found[E].stale).toBeFalsy()
+    expect(contextFor(next.state, 'More')).toMatch(/Cedar \(affinity .*from Birch$/m)
+    expect(next.state.cards).toHaveLength(1)
+    expect(next.state.cards[0].seeds).toEqual(['Birch'])
   })
 
   it('clears stale evidence when the remaining interest is scored again', async () => {
@@ -307,7 +312,7 @@ describe('taking back an interest', () => {
 })
 
 describe('leaving out an interest from its button', () => {
-  it('drops single malt after it resolved to Lagavulin, withdraws its cards and marks mixed evidence stale', async () => {
+  it('drops single malt after it resolved to Lagavulin, withdraws its cards and grounds the next ideas on Birch alone', async () => {
     const old = await run('He loves single malt and Birch.', newState('leave-out'), [
       [tc('plan_scout', { loves: [{ name: 'single malt', kind: 'drink' }, { name: 'Birch', kind: 'named' }] })], [present()],
     ])
@@ -317,8 +322,13 @@ describe('leaving out an interest from its button', () => {
     const next = await run('Drop single malt.', old.state, [[present()]])
     expect(next.events.find((e) => e.t === 'cards_withdrawn')).toEqual({ t: 'cards_withdrawn', cards: [shown[0].id], names: ['single malt'] })
     expect(next.state.cards.some((card) => card.seeds.includes('Lagavulin'))).toBe(false)
-    expect(next.state.found[E]).toMatchObject({ seeds: ['Birch'], stale: true })
-    expect(contextFor(next.state, 'More')).not.toContain('Cedar (affinity')
+    // After a withdrawal with no ground left, the code asks the taste graph again for the seeds still in play,
+    // so the mixed result is replaced by a fresh one that rests on Birch alone.
+    const asked = next.events.filter((e) => e.t === 'call' && e.tool === 'taste_insights')
+    expect(asked.length).toBeGreaterThan(0)
+    expect(next.state.found[E]).toMatchObject({ seeds: ['Birch'] })
+    expect(next.state.found[E].stale).toBeFalsy()
+    expect(contextFor(next.state, 'More')).toMatch(/Cedar \(affinity .*from Birch$/m)
     expect(next.events.find((e) => e.t === 'say')).toEqual({ t: 'say', text: 'Dropped what came from single malt: A gift from Cedar.' })
   })
 })
