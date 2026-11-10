@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { plain } from '../../src/agent/text'
+// @ts-expect-error The public renderer has no declaration.
+import { cardHtml } from '../../public/render.js'
 
 describe('plain text dashes and hyphens', () => {
   it('converts non-breaking hyphen and spaced em dash', () => {
@@ -47,5 +49,17 @@ describe('plain text dashes and hyphens', () => {
     const res2 = plain('10-20')
     expect(res2).toBe('10-20')
     expect(res2).not.toMatch(/\p{L}[-\u2010-\u2015]\p{L}/u)
+  })
+})
+
+describe('cards saved before the dash fix', () => {
+  it('draws model gift and reason text with no dash between words, from a cached run', () => {
+    const html = cardHtml({ gift: 'Laphroaig: a 12\u2011year Ardbeg single malt', why: 'A T\u2011shirt \u2014 for him', price_low: 20, price_high: 30,
+      entity: { name: 'Laphroaig', affinity: 0.9 }, seeds: ['Lagavulin'], from_call: 4 })
+    expect(html).toContain('a 12 year Ardbeg')
+    expect(html).toContain('A T shirt, for him')
+    const text = html.replace(/<[^>]*>/g, ' ')
+    expect(text).not.toMatch(/\p{L}[\u2010-\u2015]\p{L}/u)
+    expect(text).not.toMatch(/12-year|T-shirt/)
   })
 })

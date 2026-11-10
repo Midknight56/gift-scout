@@ -178,7 +178,7 @@ def auto_fit(plan, beats, script, durations, gap=0.3):
         curr = placed[i]
         diff = round(prev["end"] + gap - curr["at"], 3)
         if diff > 0:
-            need = diff
+            need = round(diff + 0.01, 3)  # a hair over, so float rounding never leaves a line 0.000001 s short
             prev_anchor = prev["anchor"]
             curr_anchor = curr["anchor"]
             if curr_anchor == prev_anchor:
@@ -208,6 +208,9 @@ def auto_fit(plan, beats, script, durations, gap=0.3):
                 speed = float(seg.get("speed", 1.0))
                 s_from = resolve_time(seg["from"], beats)
                 split_point = round(curr_anchor - LEAD * speed, 4)
+                # The hold must fall after the line before starts, or it pushes that line too (close beats on a fast piece).
+                if prev_anchor < curr_anchor and split_point <= prev_anchor:
+                    split_point = round((prev_anchor + curr_anchor) / 2, 4)
                 if split_point > s_from + 0.1 * speed:
                     first = {
                         "from": seg["from"],

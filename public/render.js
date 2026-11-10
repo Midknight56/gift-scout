@@ -2,9 +2,14 @@ export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 
-function plainName(value) {
-  return String(value ?? '').replace(/\s*\u2014\s*/g, ', ').replace(/\s*\u2013\s*/g, ' ')
-    .replace(/(\p{L})-(?=\p{L})/gu, '$1 ').replace(/\s{2,}/g, ' ').trim();
+// No dash between words on screen (the owner's rule). Same rules as plain() in src/agent/text.ts, so cached and shared
+// runs saved before that change show clean text too. A minus sign before a number and 10-20 stay. A spaced en dash in
+// a name stays a plain space ("Saint Exupery Friend"), as before.
+export function plainName(value) {
+  return String(value ?? '').replace(/\s*\u2013\s*/g, ' ').replace(/\s+[-\u2010-\u2015]\s+/g, ', ')
+    .replace(/([\p{L}\p{N}])[-\u2010-\u2015](?=\p{L})/gu, '$1 ')
+    .replace(/(\p{L})[-\u2010-\u2015](?=\p{N})/gu, '$1 ')
+    .replace(/\s{2,}/g, ' ').trim();
 }
 
 export function shippingProblem(values) {
@@ -28,7 +33,7 @@ export function orderBlockHtml(order) {
   const fact = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
   return '<p class="eyebrow">PayPal sandbox</p>'
     + `<h3 class="order-title">${escapeHtml(title)}</h3>`
-    + `<p class="order-gift">${escapeHtml(order.gift)}</p>`
+    + `<p class="order-gift">${escapeHtml(plainName(order.gift))}</p>`
     + `<ol class="order-steps">${steps}</ol>`
     + '<p class="order-note">PayPal sandbox test. No store order is placed and nothing ships.</p>'
     + '<dl class="order-facts">'
@@ -86,8 +91,8 @@ export function merchantHost(url) {
 
 /** `buyable` adds the buy button: only on the latest cards of a live conversation, never on a share page. */
 export function cardHtml(card, { buyable = false } = {}) {
-  const gift = escapeHtml(card.gift);
-  const why = escapeHtml(card.why);
+  const gift = escapeHtml(plainName(card.gift));
+  const why = escapeHtml(plainName(card.why));
   const activeSeeds = new Set(Array.isArray(card.seeds) ? card.seeds : []);
   const hasShares = Array.isArray(card.seed_shares);
   const percentages = splitShares(Array.isArray(card.seed_shares) ? card.seed_shares.filter((item) => activeSeeds.has(item?.name)) : []);
@@ -291,13 +296,13 @@ export function callRowHtml(callEvent, resultEvent, names = {}) {
 
 /** The panel row of a PayPal sandbox order, and of its capture. */
 export function orderRowHtml(event) {
-  return `<article class="call-row pay-row" data-order="${escapeHtml(event.order_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal order</span><span class="call-ms">sandbox</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.product_title || event.gift)}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, order ${escapeHtml(event.order_id)}</p><p class="pay-line">${event.method === 'card' ? 'Waiting for PayPal to confirm the payment' : 'Waiting for the buyer to approve at PayPal'}</p></div></article>`;
+  return `<article class="call-row pay-row" data-order="${escapeHtml(event.order_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal order</span><span class="call-ms">sandbox</span></div><div class="call-body"><p class="pay-line">${escapeHtml(plainName(event.product_title || event.gift))}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, order ${escapeHtml(event.order_id)}</p><p class="pay-line">${event.method === 'card' ? 'Waiting for PayPal to confirm the payment' : 'Waiting for the buyer to approve at PayPal'}</p></div></article>`;
 }
 
 export function paidRowHtml(event) {
   const at = new Date(event.at);
   const when = Number.isNaN(at.getTime()) ? '' : at.toLocaleString();
-  return `<article class="call-row pay-row paid" data-capture="${escapeHtml(event.capture_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal capture</span><span class="cached-badge">paid</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.product_title || event.gift)}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, capture ${escapeHtml(event.capture_id)}</p><p class="pay-line">Order ${escapeHtml(event.order_id)}, ${escapeHtml(when)}</p></div></article>`;
+  return `<article class="call-row pay-row paid" data-capture="${escapeHtml(event.capture_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal capture</span><span class="cached-badge">paid</span></div><div class="call-body"><p class="pay-line">${escapeHtml(plainName(event.product_title || event.gift))}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, capture ${escapeHtml(event.capture_id)}</p><p class="pay-line">Order ${escapeHtml(event.order_id)}, ${escapeHtml(when)}</p></div></article>`;
 }
 
 /** The panel row of the PayPal tracker added after the capture. */
@@ -307,7 +312,7 @@ export function shippedRowHtml(event) {
 
 /** The panel row of a full refund. */
 export function refundRowHtml(event) {
-  return `<article class="call-row pay-row refunded" data-refund-row="${escapeHtml(event.refund_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">refunded</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.gift)}</p><p class="pay-line">$${escapeHtml(event.amount)} USD back, refund ${escapeHtml(event.refund_id)}</p><p class="pay-line">Capture ${escapeHtml(event.capture_id)}</p></div></article>`;
+  return `<article class="call-row pay-row refunded" data-refund-row="${escapeHtml(event.refund_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">refunded</span></div><div class="call-body"><p class="pay-line">${escapeHtml(plainName(event.gift))}</p><p class="pay-line">$${escapeHtml(event.amount)} USD back, refund ${escapeHtml(event.refund_id)}</p><p class="pay-line">Capture ${escapeHtml(event.capture_id)}</p></div></article>`;
 }
 
 /** The plain model's gift ideas and how they score in Qloo. */
@@ -363,11 +368,11 @@ export function compareHtml(event) {
 }
 
 export function refundPendingRowHtml(event) {
-  return `<article class="call-row pay-row refund-pending" data-refund-row="${escapeHtml(event.refund_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">pending</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.gift)}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, refund pending</p><p class="pay-line">Refund ${escapeHtml(event.refund_id)}</p><p class="pay-line">Capture ${escapeHtml(event.capture_id)}</p></div></article>`;
+  return `<article class="call-row pay-row refund-pending" data-refund-row="${escapeHtml(event.refund_id)}"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">pending</span></div><div class="call-body"><p class="pay-line">${escapeHtml(plainName(event.gift))}</p><p class="pay-line">$${escapeHtml(event.amount)} USD, refund pending</p><p class="pay-line">Refund ${escapeHtml(event.refund_id)}</p><p class="pay-line">Capture ${escapeHtml(event.capture_id)}</p></div></article>`;
 }
 
 export function refundFailedRowHtml(event) {
-  return `<article class="call-row pay-row refund-failed"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">failed</span></div><div class="call-body"><p class="pay-line">${escapeHtml(event.gift)}</p><p class="pay-line">PayPal did not complete the refund. The payment stands.</p><p class="pay-line">Refund ${escapeHtml(event.refund_id)}</p></div></article>`;
+  return `<article class="call-row pay-row refund-failed"><div class="call-head"><span class="call-number">$</span><span class="call-tool">PayPal refund</span><span class="cached-badge">failed</span></div><div class="call-body"><p class="pay-line">${escapeHtml(plainName(event.gift))}</p><p class="pay-line">PayPal did not complete the refund. The payment stands.</p><p class="pay-line">Refund ${escapeHtml(event.refund_id)}</p></div></article>`;
 }
 
 export function quoteFor(card) {
