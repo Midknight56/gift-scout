@@ -119,6 +119,12 @@ describe('worker judging limits', () => {
         await response.text(); await Promise.all(pending.splice(0))
         expect(limits).toContain(expected)
       }
+      // A worker setting can lift the visitor's compare count for one filmed take; spend still goes through the ledger.
+      ;(env as unknown as { COMPARES_PER_VISITOR?: string }).COMPARES_PER_VISITOR = '20'
+      limits.length = 0
+      const lifted = await worker.fetch(new Request('https://gift.test/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation: id, owner: await ownerToken(id, 'test') }) }), env, ctx)
+      await lifted.text(); await Promise.all(pending.splice(0))
+      expect(limits).toContain(20)
     } finally { globalThis.fetch = originalFetch }
   })
 })

@@ -238,7 +238,7 @@ function drawCards(event) {
   for (const d of event.dropped || []) {
     const p = document.createElement('p');
     p.className = 'dropped-item';
-    p.innerHTML = `<strong>${escapeHtml(d.gift)}</strong><span>${escapeHtml(d.reason)}</span>`;
+    p.innerHTML = `<strong>${escapeHtml(plainName(d.gift))}</strong><span>${escapeHtml(d.reason)}</span>`;
     droppedList.append(p);
   }
   droppedWrap.hidden = !droppedList.children.length;
